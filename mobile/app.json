@@ -1,0 +1,13 @@
+{
+  "expo": {
+    "name": "Lyrpay Mobile",
+    "slug": "lyrpay-mobile",
+    "version": "0.1.0",
+    "sdkVersion": "50.0.0",
+    "platforms": ["ios", "android", "web"],
+    "assetBundlePatterns": ["**/*"],
+    "extra": {
+      "apiBaseUrl": "http://localhost:8000/api"
+    }
+  }
+}

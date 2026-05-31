@@ -1,0 +1,18 @@
+# Python
+backend/.venv
+backend/__pycache__
+backend/*.py[cod]
+backend/*.pyo
+backend/.env
+
+# Node
+frontend/node_modules
+frontend/dist
+frontend/.vite
+mobile/node_modules
+mobile/.expo
+mobile/.expo-shared
+
+# IDE
+.vscode
+.DS_Store
