@@ -49,3 +49,12 @@ Components:
 - The backend includes integration stubs for major finance endpoints (Binance, Coinbase, Plaid, Stripe).
 - Replace the placeholder API keys with real credentials for live integrations.
 - This project is a starting point for building a larger Web3 trading platform.
+
+## AWS Lambda Deployment
+1. Ensure AWS credentials are configured and valid.
+2. Install AWS SAM CLI.
+3. Set the S3 bucket name and run:
+   ```bash
+   S3_BUCKET=my-bucket ./deploy-lambda.sh
+   ```
+4. The SAM template uses `backend/app/lambda_handler.py` and deploys the function behind API Gateway.

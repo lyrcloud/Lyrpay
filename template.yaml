@@ -1,0 +1,57 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Lyrpay Web3 Trading Platform backend deployed to AWS Lambda and API Gateway.
+
+Parameters:
+  StageName:
+    Type: String
+    Default: prod
+  S3Bucket:
+    Type: String
+    Description: S3 bucket used for packaging Lambda deployment artifacts.
+  S3Prefix:
+    Type: String
+    Default: lyrpay-backend
+
+Resources:
+  LyrpayApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: !Ref StageName
+      Cors:
+        AllowMethods: "OPTIONS,GET,POST,PUT,DELETE,PATCH"
+        AllowHeaders: "'*'"
+        AllowOrigin: "'*'"
+
+  LyrpayBackendFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: lyrpay-backend
+      Handler: app.lambda_handler.handler
+      Runtime: python3.12
+      CodeUri: backend/
+      MemorySize: 512
+      Timeout: 30
+      Architectures:
+        - x86_64
+      Policies:
+        - AWSLambdaBasicExecutionRole
+      Environment:
+        Variables:
+          BINANCE_API_URL: https://api.binance.com
+          COINBASE_API_URL: https://api.coinbase.com
+      Events:
+        ApiProxy:
+          Type: Api
+          Properties:
+            RestApiId: !Ref LyrpayApi
+            Path: /{proxy+}
+            Method: ANY
+
+Outputs:
+  ApiUrl:
+    Description: URL for the Lyrpay API Gateway endpoint
+    Value: !Sub "https://${LyrpayApi}.execute-api.${AWS::Region}.amazonaws.com/${StageName}"
+  LambdaFunctionName:
+    Description: Lambda function name
+    Value: !Ref LyrpayBackendFunction
