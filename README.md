@@ -34,6 +34,21 @@ Components:
    npm run dev
    ```
 
+### Frontend static hosting on AWS S3
+1. Create an S3 bucket with a unique name.
+2. Configure AWS CLI credentials:
+   ```bash
+   aws configure
+   ```
+3. From the repo root, deploy the frontend:
+   ```bash
+   S3_BUCKET=my-bucket ./deploy-frontend-s3.sh
+   ```
+4. Verify the website endpoint:
+   ```bash
+   aws s3 website s3://my-bucket
+   ```
+
 ### Mobile
 1. Navigate to `mobile/`
 2. Install dependencies:

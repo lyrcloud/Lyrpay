@@ -1,4 +1,4 @@
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api';
+const API_BASE = import.meta.env.VITE_API_BASE_URL || 'https://tsgo4ww25a.execute-api.us-east-1.amazonaws.com/api';
 
 async function request(path: string, init: RequestInit = {}) {
   const response = await fetch(`${API_BASE}${path}`, {

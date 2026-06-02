@@ -16,3 +16,6 @@ mobile/.expo-shared
 # IDE
 .vscode
 .DS_Store
+/.venv
+deployment-package.zip
+response.json
