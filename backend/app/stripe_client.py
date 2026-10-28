@@ -29,6 +29,7 @@ def secret_key() -> str | None:
             try:
                 _key = boto3.client("secretsmanager").get_secret_value(SecretId=SECRET_ID)["SecretString"].strip()
             except Exception:
+                _key = None  # look again next time, so a secret added later is picked up
                 return None
     return _key or None
 
