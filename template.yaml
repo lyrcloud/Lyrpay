@@ -1,57 +1,202 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: Lyrpay Web3 Trading Platform backend deployed to AWS Lambda and API Gateway.
+Description: Lyrpay - web dashboard (S3 + CloudFront), payments API (Lambda) and ledger (DynamoDB).
 
 Parameters:
-  StageName:
+  PrimaryOrigin:
     Type: String
-    Default: prod
-  S3Bucket:
+    Default: https://app.lyrpay.com
+    Description: The site's main origin (the CloudFront domain until lyrpay.com points here). deploy.sh fills it in.
+  UserPoolId:
     Type: String
-    Description: S3 bucket used for packaging Lambda deployment artifacts.
-  S3Prefix:
-    Type: String
-    Default: lyrpay-backend
+    Default: us-east-1_elNSe2VTE
+    Description: The Lyr account pool shared with Lyrtrip (email, mobile number and Google sign-in).
+  FxFeeBps:
+    Type: Number
+    Default: 50
+    Description: Spread on currency conversions in basis points.
 
 Resources:
-  LyrpayApi:
-    Type: AWS::Serverless::Api
+  LedgerTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
-      StageName: !Ref StageName
-      Cors:
-        AllowMethods: "OPTIONS,GET,POST,PUT,DELETE,PATCH"
-        AllowHeaders: "'*'"
-        AllowOrigin: "'*'"
+      TableName: lyrpay-ledger
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: pk, AttributeType: S }
+        - { AttributeName: sk, AttributeType: S }
+      KeySchema:
+        - { AttributeName: pk, KeyType: HASH }
+        - { AttributeName: sk, KeyType: RANGE }
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
 
-  LyrpayBackendFunction:
+  WebClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: lyrpay-web
+      UserPoolId: !Ref UserPoolId
+      GenerateSecret: false
+      ExplicitAuthFlows:
+        - ALLOW_USER_PASSWORD_AUTH
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+      SupportedIdentityProviders: [COGNITO, Google]
+      AllowedOAuthFlows: [code]
+      AllowedOAuthScopes: [openid, email, profile, phone]
+      AllowedOAuthFlowsUserPoolClient: true
+      CallbackURLs:
+        - !Sub '${PrimaryOrigin}/auth/callback'
+        - https://lyrpay.com/auth/callback
+        - https://www.lyrpay.com/auth/callback
+        - http://localhost:5173/auth/callback
+      LogoutURLs:
+        - !Ref PrimaryOrigin
+        - https://lyrpay.com
+        - https://www.lyrpay.com
+        - http://localhost:5173
+      PreventUserExistenceErrors: ENABLED
+      EnableTokenRevocation: true
+
+  ApiFunction:
     Type: AWS::Serverless::Function
     Properties:
-      FunctionName: lyrpay-backend
+      FunctionName: lyrpay-api
       Handler: app.lambda_handler.handler
       Runtime: python3.12
       CodeUri: backend/
       MemorySize: 512
-      Timeout: 30
-      Architectures:
-        - x86_64
-      Policies:
-        - AWSLambdaBasicExecutionRole
+      Timeout: 29
+      Architectures: [x86_64]
       Environment:
         Variables:
-          BINANCE_API_URL: https://api.binance.com
-          COINBASE_API_URL: https://api.coinbase.com
-      Events:
-        ApiProxy:
-          Type: Api
-          Properties:
-            RestApiId: !Ref LyrpayApi
-            Path: /{proxy+}
-            Method: ANY
+          COGNITO_REGION: !Ref AWS::Region
+          COGNITO_USER_POOL_ID: !Ref UserPoolId
+          COGNITO_CLIENT_ID: !Ref WebClient
+          LEDGER_TABLE: !Ref LedgerTable
+          ALLOWED_ORIGINS: !Sub '${PrimaryOrigin},https://lyrpay.com,https://www.lyrpay.com,http://localhost:5173'
+          STRIPE_SECRET_ID: lyrpay/stripe
+          FX_FEE_BPS: !Ref FxFeeBps
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LedgerTable
+        - Statement:
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:lyrpay/stripe-*'
+      FunctionUrlConfig:
+        AuthType: NONE
+
+  SiteBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  SiteBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref SiteBucket
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal: { Service: cloudfront.amazonaws.com }
+            Action: s3:GetObject
+            Resource: !Sub '${SiteBucket.Arn}/*'
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${Distribution}'
+
+  SiteOac:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub '${AWS::StackName}-site'
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  # Paths without a file extension are app routes (/login, /auth/callback), served by index.html
+  SpaRewrite:
+    Type: AWS::CloudFront::Function
+    Properties:
+      Name: !Sub '${AWS::StackName}-spa-rewrite'
+      AutoPublish: true
+      FunctionConfig:
+        Comment: Serve index.html for app routes
+        Runtime: cloudfront-js-2.0
+      FunctionCode: |
+        function handler(event) {
+          var request = event.request;
+          if (!/\.[a-zA-Z0-9]+$/.test(request.uri)) request.uri = '/index.html';
+          return request;
+        }
+
+  SecurityHeaders:
+    Type: AWS::CloudFront::ResponseHeadersPolicy
+    Properties:
+      ResponseHeadersPolicyConfig:
+        Name: !Sub '${AWS::StackName}-security'
+        SecurityHeadersConfig:
+          StrictTransportSecurity: { AccessControlMaxAgeSec: 63072000, IncludeSubdomains: true, Override: true }
+          ContentTypeOptions: { Override: true }
+          FrameOptions: { FrameOption: DENY, Override: true }
+          ReferrerPolicy: { ReferrerPolicy: strict-origin-when-cross-origin, Override: true }
+
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: Lyrpay
+        HttpVersion: http2and3
+        DefaultRootObject: index.html
+        PriceClass: PriceClass_All
+        Origins:
+          - Id: site
+            DomainName: !GetAtt SiteBucket.RegionalDomainName
+            OriginAccessControlId: !Ref SiteOac
+            S3OriginConfig: { OriginAccessIdentity: '' }
+          - Id: api
+            DomainName: !Select [2, !Split ['/', !GetAtt ApiFunctionUrl.FunctionUrl]]
+            CustomOriginConfig:
+              OriginProtocolPolicy: https-only
+              OriginSSLProtocols: [TLSv1.2]
+        DefaultCacheBehavior:
+          TargetOriginId: site
+          ViewerProtocolPolicy: redirect-to-https
+          Compress: true
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6 # Managed-CachingOptimized
+          ResponseHeadersPolicyId: !Ref SecurityHeaders
+          FunctionAssociations:
+            - EventType: viewer-request
+              FunctionARN: !GetAtt SpaRewrite.FunctionMetadata.FunctionARN
+        CacheBehaviors:
+          - PathPattern: /api/*
+            TargetOriginId: api
+            ViewerProtocolPolicy: https-only
+            AllowedMethods: [GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE]
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad # Managed-CachingDisabled
+            OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac # Managed-AllViewerExceptHostHeader
+            ResponseHeadersPolicyId: !Ref SecurityHeaders
 
 Outputs:
-  ApiUrl:
-    Description: URL for the Lyrpay API Gateway endpoint
-    Value: !Sub "https://${LyrpayApi}.execute-api.${AWS::Region}.amazonaws.com/${StageName}"
-  LambdaFunctionName:
-    Description: Lambda function name
-    Value: !Ref LyrpayBackendFunction
+  SiteUrl:
+    Value: !Sub 'https://${Distribution.DomainName}'
+  DistributionId:
+    Value: !Ref Distribution
+  SiteBucketName:
+    Value: !Ref SiteBucket
+  ApiFunctionUrl:
+    Value: !GetAtt ApiFunctionUrl.FunctionUrl
+  UserPoolId:
+    Value: !Ref UserPoolId
+  UserPoolClientId:
+    Value: !Ref WebClient

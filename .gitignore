@@ -1,21 +1,25 @@
 # Python
-backend/.venv
-backend/__pycache__
-backend/*.py[cod]
-backend/*.pyo
+.venv
+__pycache__
+*.py[cod]
+.pytest_cache
 backend/.env
 
 # Node
-frontend/node_modules
+node_modules
 frontend/dist
 frontend/.vite
-mobile/node_modules
+frontend/.env.local
 mobile/.expo
 mobile/.expo-shared
+
+# AWS
+.aws-sam
+samconfig.toml
+packaged.yaml
+deployment-package.zip
+response.json
 
 # IDE
 .vscode
 .DS_Store
-/.venv
-deployment-package.zip
-response.json

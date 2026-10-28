@@ -1,28 +1,49 @@
 #!/usr/bin/env bash
-set -e
+# Builds and deploys everything: API + ledger + sign-in client (template.yaml), then the web dashboard.
+# Usage: ./deploy.sh            (PRIMARY_ORIGIN=https://lyrpay.com ./deploy.sh once that domain points at CloudFront)
+set -euo pipefail
+cd "$(dirname "$0")"
 
-if [ -z "$S3_BUCKET" ] || [ -z "$LAMBDA_FUNCTION_NAME" ]; then
-  echo "Please set S3_BUCKET and LAMBDA_FUNCTION_NAME environment variables."
-  echo "Example: S3_BUCKET=my-bucket LAMBDA_FUNCTION_NAME=lyrpay-backend ./deploy.sh"
-  exit 1
+STACK=${STACK_NAME:-lyrpay}
+REGION=${AWS_REGION:-us-east-1}
+# Hosted UI of the Lyr account pool shared with Lyrtrip
+COGNITO_DOMAIN=${COGNITO_DOMAIN:-lyrtrip-auth.auth.us-east-1.amazoncognito.com}
+
+output() {
+  aws cloudformation describe-stacks --stack-name "$STACK" --region "$REGION" \
+    --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text 2>/dev/null || true
+}
+
+deploy_stack() {
+  sam deploy --stack-name "$STACK" --region "$REGION" --resolve-s3 --capabilities CAPABILITY_IAM \
+    --no-confirm-changeset --no-fail-on-empty-changeset --parameter-overrides "PrimaryOrigin=$1"
+}
+
+echo "Building API..."
+sam build --template-file template.yaml
+
+ORIGIN=${PRIMARY_ORIGIN:-$(output SiteUrl)}
+deploy_stack "${ORIGIN:-https://app.lyrpay.com}"
+
+# First deploy: the CloudFront domain only exists now, so sign-in callbacks and payment redirects are pointed at it
+SITE_URL=$(output SiteUrl)
+if [ -z "${PRIMARY_ORIGIN:-}" ] && [ "$ORIGIN" != "$SITE_URL" ]; then
+  deploy_stack "$SITE_URL"
 fi
 
-echo "Building frontend..."
-cd frontend
-npm install
-npm run build
-cd ..
+echo "Building web dashboard..."
+(
+  cd frontend
+  npm ci
+  VITE_COGNITO_REGION="$REGION" \
+  VITE_COGNITO_CLIENT_ID="$(output UserPoolClientId)" \
+  VITE_COGNITO_DOMAIN="$COGNITO_DOMAIN" \
+    npm run build
+)
 
-echo "Syncing frontend build to S3 bucket: $S3_BUCKET"
-aws s3 sync frontend/dist s3://$S3_BUCKET --delete --acl public-read
+BUCKET=$(output SiteBucketName)
+aws s3 sync frontend/dist/assets "s3://$BUCKET/assets" --cache-control "public,max-age=31536000,immutable"
+aws s3 sync frontend/dist "s3://$BUCKET" --delete --exclude "assets/*" --cache-control "no-cache"
+aws cloudfront create-invalidation --distribution-id "$(output DistributionId)" --paths "/*" >/dev/null
 
-echo "Packaging backend for Lambda..."
-cd backend
-rm -f deployment-package.zip
-zip -r ../deployment-package.zip app requirements.txt pyproject.toml
-cd ..
-
-echo "Updating Lambda function: $LAMBDA_FUNCTION_NAME"
-aws lambda update-function-code --function-name "$LAMBDA_FUNCTION_NAME" --zip-file fileb://deployment-package.zip
-
-echo "Deployment complete."
+echo "Lyrpay is live at $SITE_URL"

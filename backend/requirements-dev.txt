@@ -1,0 +1,4 @@
+-r requirements.txt
+uvicorn[standard]>=0.30.0
+pytest>=8.0.0
+moto[dynamodb]>=5.0.0

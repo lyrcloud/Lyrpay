@@ -1,75 +1,68 @@
-# Lyrpay Web3 Crypto Trading Platform
+# Lyrpay
 
-This repository contains a full-stack scaffold for a multifunction money and crypto trading platform.
+Hold, send and convert money in every currency, top up through Stripe, and follow the crypto markets.
 
-Components:
-- `backend/` — Python FastAPI backend with crypto trading, wallet, and third-party API integration points.
-- `frontend/` — React + Vite web application for trading dashboards and Web3 wallet interaction.
-- `mobile/` — React Native Expo mobile app with basic wallet and market views.
+Live: https://d2figysrc1xdl9.cloudfront.net (lyrpay.com once its DNS points here, see below)
 
-## Setup
+## What works today
 
-### Backend
-1. Navigate to `backend/`
-2. Create a virtual environment and install dependencies:
-   ```bash
-   python -m venv .venv
-   source .venv/bin/activate
-   pip install -r requirements.txt
-   ```
-3. Copy `.env.example` to `.env` and fill API keys.
-4. Run the app:
-   ```bash
-   uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
-   ```
+- **Sign-in with your Lyr account**: the Cognito pool Lyrtrip uses (`us-east-1_elNSe2VTE`), so one account works on both. Email + password, mobile number + password (the code is texted through Lyrtrip's Twilio Verify, relayed by `/api/auth/phone/*`), or Google.
+- **Wallet**: balances in any of ~165 currencies, valued in the person's home currency (picked from their country).
+- **Add money**: Stripe Checkout in the chosen currency. Checkout offers every payment method switched on in the Stripe dashboard (cards, Apple/Google Pay, bank debits, local methods). The balance is credited once the session is paid, at most once per session.
+- **Send**: instant transfers to anyone on Lyrpay by verified email or mobile number.
+- **Convert**: between currencies at the mid-market rate minus `FX_FEE_BPS` (0.5% by default), rounded down to the target's smallest unit.
+- **Crypto markets** (CoinGecko) and **world exchange rates** (open.er-api.com, updated daily).
+- **Web3 wallet**: connects a browser wallet and shows its address, chain and native balance.
 
-### Frontend
-1. Navigate to `frontend/`
-2. Install dependencies:
-   ```bash
-   npm install
-   ```
-3. Start development server:
-   ```bash
-   npm run dev
-   ```
+PayPal, Wise, Western Union, Ria, Robinhood, Kalshi, Gemini, Coinbase and Kraken are listed under Connections as *coming soon*: each needs a partner account and API approval before money can move through it.
 
-### Frontend static hosting on AWS S3
-1. Create an S3 bucket with a unique name.
-2. Configure AWS CLI credentials:
-   ```bash
-   aws configure
-   ```
-3. From the repo root, deploy the frontend:
-   ```bash
-   S3_BUCKET=my-bucket ./deploy-frontend-s3.sh
-   ```
-4. Verify the website endpoint:
-   ```bash
-   aws s3 website s3://my-bucket
-   ```
+## Layout
 
-### Mobile
-1. Navigate to `mobile/`
-2. Install dependencies:
-   ```bash
-   npm install
-   ```
-3. Run Expo:
-   ```bash
-   npm start
-   ```
+```
+backend/    FastAPI on Lambda (Mangum): auth.py checks Cognito ID tokens, ledger.py keeps balances in DynamoDB
+            with transactional debits/credits, stripe_client.py, rates.py
+frontend/   React + Vite dashboard; lib/auth.ts is the Cognito helper (same flows as Lyrtrip)
+template.yaml  DynamoDB ledger, API Lambda + Function URL, Lyrpay's app client in the Lyr account pool,
+               S3 + CloudFront (serves /api/* from the Lambda, so the site and API share an origin)
+deploy.sh   builds and deploys all of it
+mobile/     Expo app from the original scaffold, not yet moved to the new API
+```
 
-## Notes
-- The backend includes integration stubs for major finance endpoints (Binance, Coinbase, Plaid, Stripe).
-- Replace the placeholder API keys with real credentials for live integrations.
-- This project is a starting point for building a larger Web3 trading platform.
+## Deploy
 
-## AWS Lambda Deployment
-1. Ensure AWS credentials are configured and valid.
-2. Install AWS SAM CLI.
-3. Set the S3 bucket name and run:
-   ```bash
-   S3_BUCKET=my-bucket ./deploy-lambda.sh
-   ```
-4. The SAM template uses `backend/app/lambda_handler.py` and deploys the function behind API Gateway.
+Needs AWS credentials, the SAM CLI and Node 20+.
+
+```bash
+./deploy.sh
+```
+
+The first run creates the stack, then redeploys once so sign-in callbacks and payment redirects use the new CloudFront domain.
+
+### Switch on card payments
+
+The API reads the Stripe secret key from Secrets Manager:
+
+```bash
+aws secretsmanager create-secret --name lyrpay/stripe --secret-string 'sk_live_or_test_...'
+```
+
+Warm Lambdas cache the key, so update the function or wait a few minutes before checking that `/api/config` shows `"cardPayments": true`.
+
+### Point lyrpay.com here
+
+lyrpay.com's DNS is on Cloudflare. Request an ACM certificate in us-east-1 for `lyrpay.com` and `www.lyrpay.com`, add its validation CNAMEs in Cloudflare, add the domains as CloudFront aliases, CNAME them to the distribution, then:
+
+```bash
+PRIMARY_ORIGIN=https://lyrpay.com ./deploy.sh
+```
+
+## Run locally
+
+```bash
+cd backend && python -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
+cp .env.example .env   # fill COGNITO_CLIENT_ID from the stack output UserPoolClientId
+.venv/bin/uvicorn app.main:app --reload --port 8000 --env-file .env
+.venv/bin/python -m pytest
+
+cd frontend && npm install && cp .env.example .env.local && npm run dev   # proxies /api to :8000
+```
