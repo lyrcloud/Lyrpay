@@ -15,6 +15,13 @@ Parameters:
     Type: Number
     Default: 50
     Description: Spread on currency conversions in basis points.
+  CertificateArn:
+    Type: String
+    Default: ''
+    Description: Issued us-east-1 ACM certificate for lyrpay.com and www.lyrpay.com. Empty serves only the CloudFront domain.
+
+Conditions:
+  HasDomain: !Not [!Equals [!Ref CertificateArn, '']]
 
 Globals:
   Function:
@@ -187,6 +194,11 @@ Resources:
       DistributionConfig:
         Enabled: true
         Comment: Lyrpay
+        Aliases: !If [HasDomain, [lyrpay.com, www.lyrpay.com], !Ref AWS::NoValue]
+        ViewerCertificate: !If
+          - HasDomain
+          - { AcmCertificateArn: !Ref CertificateArn, SslSupportMethod: sni-only, MinimumProtocolVersion: TLSv1.2_2021 }
+          - !Ref AWS::NoValue
         HttpVersion: http2and3
         DefaultRootObject: index.html
         PriceClass: PriceClass_All
@@ -220,7 +232,7 @@ Resources:
 
 Outputs:
   SiteUrl:
-    Value: !Sub 'https://${Distribution.DomainName}'
+    Value: !If [HasDomain, 'https://lyrpay.com', !Sub 'https://${Distribution.DomainName}']
   DistributionId:
     Value: !Ref Distribution
   SiteBucketName:

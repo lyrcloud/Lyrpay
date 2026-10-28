@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Builds and deploys everything: API + ledger + sign-in client (template.yaml), then the web dashboard.
-# Usage: ./deploy.sh            (PRIMARY_ORIGIN=https://lyrpay.com ./deploy.sh once that domain points at CloudFront)
+# Usage: ./deploy.sh
+# Custom domain (once): CERTIFICATE_ARN=<issued lyrpay.com cert> ./deploy.sh, then point lyrpay.com at CloudFront
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -14,9 +15,14 @@ output() {
     --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text 2>/dev/null || true
 }
 
+# Keeps the custom domain's certificate across plain redeploys
+CERTIFICATE_ARN=${CERTIFICATE_ARN:-$(aws cloudformation describe-stacks --stack-name "$STACK" --region "$REGION" \
+  --query "Stacks[0].Parameters[?ParameterKey=='CertificateArn'].ParameterValue" --output text 2>/dev/null || true)}
+[ "$CERTIFICATE_ARN" = "None" ] && CERTIFICATE_ARN=""
+
 deploy_stack() {
   sam deploy --stack-name "$STACK" --region "$REGION" --resolve-s3 --capabilities CAPABILITY_IAM \
-    --no-confirm-changeset --no-fail-on-empty-changeset --parameter-overrides "PrimaryOrigin=$1"
+    --no-confirm-changeset --no-fail-on-empty-changeset --parameter-overrides "PrimaryOrigin=$1" "CertificateArn=${CERTIFICATE_ARN:-}"
 }
 
 echo "Building API..."
