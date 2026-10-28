@@ -299,6 +299,23 @@ def settle_withdrawals(sub: str, profile: dict):
             logger.exception("Settling withdrawal %s failed", tx["id"])
 
 
+def sweep_withdrawals() -> dict:
+    """Scheduled: settle everyone's pending withdrawals, including people who haven't come back."""
+    outcomes = {"paid": 0, "failed": 0, "pending": 0, "errors": 0}
+    for indexed in ledger.all_pending_withdrawals():
+        # The index is eventually consistent; act only on what the table says now
+        tx = ledger.get_item(indexed["pk"], indexed["sk"])
+        if not tx or tx.get("status") != "pending":
+            continue
+        profile = ledger.get_item(tx["pk"], "PROFILE") or {}
+        try:
+            outcomes[send_withdrawal(tx, profile["payoutAccount"])] += 1
+        except Exception:
+            logger.exception("Settling withdrawal %s failed", tx["id"])
+            outcomes["errors"] += 1
+    return outcomes
+
+
 @app.get("/api/payouts")
 def payouts(user: User = Depends(current_user)):
     """Whether the person can withdraw yet, and in which currency."""

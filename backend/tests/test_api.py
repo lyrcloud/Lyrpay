@@ -32,7 +32,16 @@ def aws(monkeypatch):
         boto3.client("dynamodb").create_table(
             TableName=ledger.TABLE_NAME,
             KeySchema=[{"AttributeName": "pk", "KeyType": "HASH"}, {"AttributeName": "sk", "KeyType": "RANGE"}],
-            AttributeDefinitions=[{"AttributeName": "pk", "AttributeType": "S"}, {"AttributeName": "sk", "AttributeType": "S"}],
+            AttributeDefinitions=[
+                {"AttributeName": "pk", "AttributeType": "S"},
+                {"AttributeName": "sk", "AttributeType": "S"},
+                {"AttributeName": "queue", "AttributeType": "S"},
+            ],
+            GlobalSecondaryIndexes=[{
+                "IndexName": "pending",
+                "KeySchema": [{"AttributeName": "queue", "KeyType": "HASH"}, {"AttributeName": "sk", "KeyType": "RANGE"}],
+                "Projection": {"ProjectionType": "KEYS_ONLY"},
+            }],
             BillingMode="PAY_PER_REQUEST",
         )
         monkeypatch.setattr(ledger, "_table", None)
@@ -201,4 +210,24 @@ def test_unanswered_withdrawal_is_retried_when_stripe_has_none(as_user, payouts_
     assert client.get("/api/me").json()["transactions"][0]["status"] == "paid"
 
 
+
+def test_sweep_settles_withdrawals_for_people_who_never_return(as_user, payouts_ready, monkeypatch):
+    monkeypatch.setattr(stripe_client, "transfer_to", lambda *_: (_ for _ in ()).throw(stripe_client.StripeError("timeout", definitive=False)))
+    client = as_user(ALICE)
+    client.post("/api/topup/confirm", json={"sessionId": "cs_test_w5"})
+    client.patch("/api/me", json={"country": "US"})
+    client.post("/api/payouts/onboard")
+    client.post("/api/withdraw", json={"amount": "10"})
+    assert main.sweep_withdrawals() == {"paid": 0, "failed": 0, "pending": 0, "errors": 0}  # too recent
+
+    monkeypatch.setattr(ledger, "all_pending_withdrawals", lambda older_than_seconds=60: original_all(0))
+    assert main.sweep_withdrawals()["pending"] == 1  # Stripe still not answering: left alone
+    monkeypatch.setattr(stripe_client, "transfer_to", lambda *_: {"id": "tr_sweep"})
+    assert main.sweep_withdrawals()["paid"] == 1
+    assert main.sweep_withdrawals()["paid"] == 0  # settled ones leave the index
+    tx = ledger.transactions("alice")[0]
+    assert tx["status"] == "paid" and "queue" not in tx
+
+
 original = ledger.pending_withdrawals
+original_all = ledger.all_pending_withdrawals

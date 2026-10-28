@@ -15,6 +15,8 @@ from app.auth import User
 #   USER#<sub>   TX#<iso>#<id>    one line of the statement
 #   HANDLE#<email|phone>  HANDLE  sub, so people can be paid by email or number
 #   TOPUP#<session>       TOPUP   marks a Stripe payment as credited, once
+# Pending withdrawals also carry queue="withdraw", which puts them (and only them) in the sparse
+# "pending" index, so the scheduled sweep finds them without scanning the table.
 TABLE_NAME = os.getenv("LEDGER_TABLE", "lyrpay-ledger")
 
 _table = None
@@ -124,16 +126,38 @@ def transactions(sub: str, limit: int = 50) -> list[dict]:
         KeyConditionExpression=Key("pk").eq(f"USER#{sub}") & Key("sk").begins_with("TX#"),
         ScanIndexForward=False, Limit=limit,
     )["Items"]
-    return [{k: v for k, v in item.items() if k not in ("pk", "sk")} for item in items]
+    return [{k: v for k, v in item.items() if k not in ("pk", "sk", "queue")} for item in items]
+
+
+def _cutoff(older_than_seconds: int) -> str:
+    return "TX#" + (datetime.now(timezone.utc) - timedelta(seconds=older_than_seconds)).isoformat(timespec="milliseconds")
 
 
 def pending_withdrawals(sub: str, older_than_seconds: int = 60) -> list[dict]:
     """Withdrawals whose Stripe transfer had no clear answer, old enough that no request is still working on them."""
-    cutoff = (datetime.now(timezone.utc) - timedelta(seconds=older_than_seconds)).isoformat(timespec="milliseconds")
     return table().query(
-        KeyConditionExpression=Key("pk").eq(f"USER#{sub}") & Key("sk").between("TX#", f"TX#{cutoff}"),
+        KeyConditionExpression=Key("pk").eq(f"USER#{sub}") & Key("sk").between("TX#", _cutoff(older_than_seconds)),
         FilterExpression=Attr("kind").eq("withdraw") & Attr("status").eq("pending"),
     )["Items"]
+
+
+def all_pending_withdrawals(older_than_seconds: int = 60) -> list[dict]:
+    """Everyone's pending withdrawals, from the sparse index; the sweep re-reads each before acting."""
+    items, start = [], {}
+    while True:
+        page = table().query(
+            IndexName="pending",
+            KeyConditionExpression=Key("queue").eq("withdraw") & Key("sk").lte(_cutoff(older_than_seconds)),
+            **start,
+        )
+        items += page["Items"]
+        if "LastEvaluatedKey" not in page:
+            return items
+        start = {"ExclusiveStartKey": page["LastEvaluatedKey"]}
+
+
+def get_item(pk: str, sk: str) -> dict | None:
+    return table().get_item(Key={"pk": pk, "sk": sk}, ConsistentRead=True).get("Item")
 
 
 def find_recipient(handle: str) -> dict | None:
@@ -172,18 +196,24 @@ def transfer(sender: User, sender_name: str, recipient: dict, currency: str, amo
 
 def start_withdrawal(sub: str, currency: str, amount: Decimal) -> dict:
     """Take the amount off the balance before Stripe moves it, so it can't be spent twice meanwhile."""
-    tx = _tx_item(sub, "withdraw", currency, -amount, counterparty="Bank account", status="pending")
+    tx = _tx_item(sub, "withdraw", currency, -amount, counterparty="Bank account", status="pending", queue="withdraw")
     _transact([_debit(sub, currency, amount), _put(tx)], InsufficientFunds())
     return tx
 
 
 def finish_withdrawal(tx: dict, transfer_id: str):
-    table().update_item(
-        Key={"pk": tx["pk"], "sk": tx["sk"]},
-        UpdateExpression="SET #s = :s, #r = :r",
-        ExpressionAttributeNames={"#s": "status", "#r": "reference"},
-        ExpressionAttributeValues={":s": "paid", ":r": transfer_id},
-    )
+    try:
+        table().update_item(
+            Key={"pk": tx["pk"], "sk": tx["sk"]},
+            UpdateExpression="SET #s = :s, #r = :r REMOVE queue",
+            ConditionExpression="#s = :pending",
+            ExpressionAttributeNames={"#s": "status", "#r": "reference"},
+            ExpressionAttributeValues={":s": "paid", ":r": transfer_id, ":pending": "pending"},
+        )
+    except ClientError as error:
+        # Already settled by the sweep or another request
+        if error.response["Error"]["Code"] != "ConditionalCheckFailedException":
+            raise
 
 
 def fail_withdrawal(tx: dict):
@@ -193,7 +223,7 @@ def fail_withdrawal(tx: dict):
         _credit(sub, tx["currency"], -tx["amount"]),
         {"Update": {
             "TableName": TABLE_NAME, "Key": {"pk": tx["pk"], "sk": tx["sk"]},
-            "UpdateExpression": "SET #s = :s",
+            "UpdateExpression": "SET #s = :s REMOVE queue",
             "ConditionExpression": "#s = :pending",
             "ExpressionAttributeNames": {"#s": "status"},
             "ExpressionAttributeValues": {":s": "failed", ":pending": "pending"},

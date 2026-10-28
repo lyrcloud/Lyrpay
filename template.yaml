@@ -16,6 +16,22 @@ Parameters:
     Default: 50
     Description: Spread on currency conversions in basis points.
 
+Globals:
+  Function:
+    Runtime: python3.12
+    CodeUri: backend/
+    MemorySize: 512
+    Architectures: [x86_64]
+    Environment:
+      Variables:
+        COGNITO_REGION: !Ref AWS::Region
+        COGNITO_USER_POOL_ID: !Ref UserPoolId
+        COGNITO_CLIENT_ID: !Ref WebClient
+        LEDGER_TABLE: !Ref LedgerTable
+        ALLOWED_ORIGINS: !Sub '${PrimaryOrigin},https://lyrpay.com,https://www.lyrpay.com,http://localhost:5173'
+        STRIPE_SECRET_ID: lyrpay/stripe
+        FX_FEE_BPS: !Ref FxFeeBps
+
 Resources:
   LedgerTable:
     Type: AWS::DynamoDB::Table
@@ -27,9 +43,17 @@ Resources:
       AttributeDefinitions:
         - { AttributeName: pk, AttributeType: S }
         - { AttributeName: sk, AttributeType: S }
+        - { AttributeName: queue, AttributeType: S }
       KeySchema:
         - { AttributeName: pk, KeyType: HASH }
         - { AttributeName: sk, KeyType: RANGE }
+      # Sparse: only pending withdrawals carry `queue`, so the sweep reads just those
+      GlobalSecondaryIndexes:
+        - IndexName: pending
+          KeySchema:
+            - { AttributeName: queue, KeyType: HASH }
+            - { AttributeName: sk, KeyType: RANGE }
+          Projection: { ProjectionType: KEYS_ONLY }
       PointInTimeRecoverySpecification:
         PointInTimeRecoveryEnabled: true
       SSESpecification:
@@ -67,20 +91,7 @@ Resources:
     Properties:
       FunctionName: lyrpay-api
       Handler: app.lambda_handler.handler
-      Runtime: python3.12
-      CodeUri: backend/
-      MemorySize: 512
       Timeout: 29
-      Architectures: [x86_64]
-      Environment:
-        Variables:
-          COGNITO_REGION: !Ref AWS::Region
-          COGNITO_USER_POOL_ID: !Ref UserPoolId
-          COGNITO_CLIENT_ID: !Ref WebClient
-          LEDGER_TABLE: !Ref LedgerTable
-          ALLOWED_ORIGINS: !Sub '${PrimaryOrigin},https://lyrpay.com,https://www.lyrpay.com,http://localhost:5173'
-          STRIPE_SECRET_ID: lyrpay/stripe
-          FX_FEE_BPS: !Ref FxFeeBps
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref LedgerTable
@@ -90,6 +101,26 @@ Resources:
               Resource: !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:lyrpay/stripe-*'
       FunctionUrlConfig:
         AuthType: NONE
+
+  # Finishes withdrawals Stripe didn't answer, for people who don't open their wallet again
+  SweepFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: lyrpay-withdrawal-sweep
+      Handler: app.sweep.handler
+      Timeout: 300
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LedgerTable
+        - Statement:
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:lyrpay/stripe-*'
+      Events:
+        Every15Minutes:
+          Type: Schedule
+          Properties:
+            Schedule: rate(15 minutes)
 
   SiteBucket:
     Type: AWS::S3::Bucket
