@@ -119,3 +119,44 @@ def test_unverified_email_is_not_a_payment_handle():
 
 def test_requires_sign_in():
     assert TestClient(main.app).get("/api/me").status_code == 401
+
+
+@pytest.fixture
+def payouts_ready(monkeypatch):
+    monkeypatch.setattr(stripe_client, "get_checkout", lambda _: paid_session("alice"))
+    monkeypatch.setattr(stripe_client, "platform", lambda: {"country": "US", "currency": "USD"})
+    monkeypatch.setattr(stripe_client, "get_account", lambda _: {"payouts_enabled": True, "capabilities": {"transfers": "active"}})
+    monkeypatch.setattr(stripe_client, "create_connected_account", lambda **_: {"id": "acct_1"})
+    monkeypatch.setattr(stripe_client, "onboarding_link", lambda account, origin: f"https://connect.stripe.com/{account}")
+
+
+def test_withdraw_after_onboarding(as_user, payouts_ready, monkeypatch):
+    sent = []
+    monkeypatch.setattr(stripe_client, "transfer_to", lambda *args: sent.append(args) or {"id": "tr_1"})
+    client = as_user(ALICE)
+    client.post("/api/topup/confirm", json={"sessionId": "cs_test_w1"})
+    assert client.post("/api/payouts/onboard").status_code == 400  # needs a country
+    client.patch("/api/me", json={"country": "GB"})
+    assert client.post("/api/withdraw", json={"amount": "10"}).status_code == 409  # not onboarded yet
+
+    assert client.post("/api/payouts/onboard").json()["url"].endswith("acct_1")
+    assert client.get("/api/payouts").json() == {"status": "ready", "currency": "USD"}
+    result = client.post("/api/withdraw", json={"amount": "10"}).json()
+    assert result["balances"] == {"USD": "40.00"}
+    assert result["transactions"][0]["status"] == "paid"
+    assert sent == [("acct_1", Decimal("10"), "USD", result["transactions"][0]["id"])]
+    assert client.post("/api/withdraw", json={"amount": "40.01"}).status_code == 409
+
+
+def test_refused_withdrawal_restores_balance(as_user, payouts_ready, monkeypatch):
+    def refuse(*_):
+        raise RuntimeError("Insufficient platform balance.")
+    monkeypatch.setattr(stripe_client, "transfer_to", refuse)
+    client = as_user(ALICE)
+    client.post("/api/topup/confirm", json={"sessionId": "cs_test_w2"})
+    client.patch("/api/me", json={"country": "US"})
+    client.post("/api/payouts/onboard")
+    assert client.post("/api/withdraw", json={"amount": "10"}).status_code == 502
+    me = client.get("/api/me").json()
+    assert me["balances"] == {"USD": "50.00"}
+    assert me["transactions"][0]["status"] == "failed"

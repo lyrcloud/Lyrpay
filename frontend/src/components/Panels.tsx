@@ -3,8 +3,10 @@ import { api, type Coin, type Transaction } from '../lib/api';
 import { currencyName, formatDate, formatMoney, formatPrice } from '../lib/format';
 
 const KIND_LABEL: Record<Transaction['kind'], string> = {
-  topup: 'Added money', send: 'Sent', receive: 'Received', convert: 'Converted',
+  topup: 'Added money', send: 'Sent', receive: 'Received', convert: 'Converted', withdraw: 'Withdrew to bank',
 };
+
+const STATUS_LABEL = { pending: 'Processing', failed: 'Failed, returned to balance', paid: '' };
 
 export function Activity({ transactions }: { transactions: Transaction[] }) {
   if (!transactions.length) return <p className="empty">No activity yet. Add money to get started.</p>;
@@ -15,11 +17,14 @@ export function Activity({ transactions }: { transactions: Transaction[] }) {
         return (
           <li key={tx.id}>
             <div>
-              <strong>{KIND_LABEL[tx.kind]}{tx.counterparty && tx.kind !== 'topup' ? ` · ${tx.counterparty}` : ''}</strong>
-              <span>{formatDate(tx.at)}{tx.note ? ` · ${tx.note}` : ''}</span>
+              <strong>{KIND_LABEL[tx.kind]}{tx.counterparty && !['topup', 'withdraw'].includes(tx.kind) ? ` · ${tx.counterparty}` : ''}</strong>
+              <span>
+                {formatDate(tx.at)}{tx.note ? ` · ${tx.note}` : ''}
+                {tx.status && STATUS_LABEL[tx.status] ? ` · ${STATUS_LABEL[tx.status]}` : ''}
+              </span>
             </div>
             <div className="tx-amount">
-              <strong className={negative ? '' : 'positive'}>
+              <strong className={tx.status === 'failed' ? 'muted' : negative ? '' : 'positive'}>
                 {negative ? '' : '+'}{formatMoney(tx.amount, tx.currency)}
               </strong>
               {tx.kind === 'convert' && tx.toAmount && <span>+{formatMoney(tx.toAmount, tx.toCurrency!)}</span>}
@@ -104,6 +109,7 @@ type Provider = { name: string; kind: string; status: 'live' | 'soon' };
 const PROVIDERS: Provider[] = [
   { name: 'Stripe', kind: 'Cards, wallets and local methods in 135+ currencies', status: 'live' },
   { name: 'Lyrpay transfers', kind: 'Instant payments between Lyrpay accounts', status: 'live' },
+  { name: 'Bank withdrawals', kind: 'To your bank account via Stripe Connect', status: 'live' },
   { name: 'Web3 wallets', kind: 'MetaMask, Coinbase Wallet and other browser wallets', status: 'live' },
   { name: 'PayPal', kind: 'PayPal and Venmo balances', status: 'soon' },
   { name: 'Wise', kind: 'Bank payouts in 40+ currencies', status: 'soon' },

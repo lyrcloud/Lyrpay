@@ -10,7 +10,7 @@ from botocore.exceptions import ClientError
 from app.auth import User
 
 # One table:
-#   USER#<sub>   PROFILE          name, email, phone, currency, country
+#   USER#<sub>   PROFILE          name, email, phone, currency, country, payoutAccount (Stripe Connect)
 #   USER#<sub>   BAL#<CUR>        amount (major units, Decimal)
 #   USER#<sub>   TX#<iso>#<id>    one line of the statement
 #   HANDLE#<email|phone>  HANDLE  sub, so people can be paid by email or number
@@ -159,3 +159,34 @@ def transfer(sender: User, sender_name: str, recipient: dict, currency: str, amo
         _put(_tx_item(sender.sub, "send", currency, -amount, counterparty=recipient["name"], note=note)),
         _put(_tx_item(recipient["sub"], "receive", currency, amount, counterparty=sender_name, note=note)),
     ], InsufficientFunds())
+
+
+def start_withdrawal(sub: str, currency: str, amount: Decimal) -> dict:
+    """Take the amount off the balance before Stripe moves it, so it can't be spent twice meanwhile."""
+    tx = _tx_item(sub, "withdraw", currency, -amount, counterparty="Bank account", status="pending")
+    _transact([_debit(sub, currency, amount), _put(tx)], InsufficientFunds())
+    return tx
+
+
+def finish_withdrawal(tx: dict, transfer_id: str):
+    table().update_item(
+        Key={"pk": tx["pk"], "sk": tx["sk"]},
+        UpdateExpression="SET #s = :s, #r = :r",
+        ExpressionAttributeNames={"#s": "status", "#r": "reference"},
+        ExpressionAttributeValues={":s": "paid", ":r": transfer_id},
+    )
+
+
+def fail_withdrawal(tx: dict):
+    """Stripe refused the transfer: put the money back on the balance."""
+    sub = tx["pk"].removeprefix("USER#")
+    _transact([
+        _credit(sub, tx["currency"], -tx["amount"]),
+        {"Update": {
+            "TableName": TABLE_NAME, "Key": {"pk": tx["pk"], "sk": tx["sk"]},
+            "UpdateExpression": "SET #s = :s",
+            "ConditionExpression": "#s = :pending",
+            "ExpressionAttributeNames": {"#s": "status"},
+            "ExpressionAttributeValues": {":s": "failed", ":pending": "pending"},
+        }},
+    ], AlreadyApplied())

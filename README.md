@@ -10,6 +10,7 @@ Live: https://d2figysrc1xdl9.cloudfront.net (lyrpay.com once its DNS points here
 - **Wallet**: balances in any of ~165 currencies, valued in the person's home currency (picked from their country).
 - **Add money**: Stripe Checkout in the chosen currency. Checkout offers every payment method switched on in the Stripe dashboard (cards, Apple/Google Pay, bank debits, local methods). The balance is credited once the session is paid, at most once per session.
 - **Send**: instant transfers to anyone on Lyrpay by verified email or mobile number.
+- **Withdraw**: to the person's own bank account through Stripe Connect. They add bank and identity details on a Stripe-hosted page (an Express account, created in their country); Lyrpay then transfers from the platform balance and Stripe pays out to their bank. Withdrawals are in the platform's settlement currency, so other balances are converted first. The balance is debited before the transfer and restored if Stripe refuses it. Requires Connect to be enabled on the Stripe account, and enough available platform balance.
 - **Convert**: between currencies at the mid-market rate minus `FX_FEE_BPS` (0.5% by default), rounded down to the target's smallest unit.
 - **Crypto markets** (CoinGecko) and **world exchange rates** (open.er-api.com, updated daily).
 - **Web3 wallet**: connects a browser wallet and shows its address, chain and native balance.
@@ -38,7 +39,7 @@ Needs AWS credentials, the SAM CLI and Node 20+.
 
 The first run creates the stack, then redeploys once so sign-in callbacks and payment redirects use the new CloudFront domain.
 
-### Switch on card payments
+### Switch on card payments and withdrawals
 
 The API reads the Stripe secret key from Secrets Manager:
 

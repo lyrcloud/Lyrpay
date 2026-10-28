@@ -162,3 +162,60 @@ export function Convert({ currencies, balances, home, onStatement, onNotice }: P
     </form>
   );
 }
+
+export function Withdraw({ balances, onStatement, onNotice, enabled }: Props & { enabled: boolean }) {
+  const [payouts, setPayouts] = useState<{ status: 'none' | 'incomplete' | 'ready'; currency: string } | null>(null);
+  const [amount, setAmount] = useState('');
+  const { busy, error, run } = useAction();
+
+  useEffect(() => {
+    if (enabled) api.payouts().then(setPayouts).catch(() => setPayouts(null));
+  }, [enabled]);
+
+  const setUp = run(async () => {
+    location.href = (await api.onboardPayouts()).url;
+  });
+
+  const submit = run(async () => {
+    const result = await api.withdraw(amount);
+    onStatement(result);
+    onNotice(`${formatMoney(result.withdrawn, result.currency)} is on its way to your bank.`);
+    setAmount('');
+  });
+
+  if (!enabled) return <p className="empty">Bank withdrawals are being switched on. Check back soon.</p>;
+  if (!payouts) return <p className="empty">Loading…</p>;
+
+  if (payouts.status !== 'ready') {
+    return (
+      <form className="form" onSubmit={setUp}>
+        <p className="hint">
+          {payouts.status === 'none'
+            ? 'To withdraw, add your bank account. Stripe checks your identity and keeps your bank details; Lyrpay never sees them.'
+            : 'Stripe still needs a few details before you can withdraw.'}
+        </p>
+        {error && <p className="error" role="alert">{error}</p>}
+        <button className="button primary" disabled={busy}>
+          {busy ? 'Opening Stripe…' : payouts.status === 'none' ? 'Add bank account' : 'Finish setup'}
+        </button>
+      </form>
+    );
+  }
+
+  const { currency } = payouts;
+  return (
+    <form className="form" onSubmit={submit}>
+      <div className="amount-row">
+        <input inputMode="decimal" placeholder="0.00" required value={amount} onChange={e => setAmount(e.target.value)} aria-label="Amount" />
+        <select value={currency} disabled aria-label="Currency"><option>{currency} · {currencyName(currency)}</option></select>
+      </div>
+      <p className="hint">
+        Available: {formatMoney(balances[currency] ?? 0, currency)}. Withdrawals are paid in {currency}; convert other
+        currencies first. Stripe pays out to your bank in about 2 business days.
+      </p>
+      {error && <p className="error" role="alert">{error}</p>}
+      <button className="button primary" disabled={busy}>{busy ? 'Withdrawing…' : 'Withdraw'}</button>
+      <button type="button" className="link" disabled={busy} onClick={setUp}>Change bank account</button>
+    </form>
+  );
+}

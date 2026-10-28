@@ -5,9 +5,10 @@ export type Profile = { name: string; email: string; phone: string; currency: st
 export type Transaction = {
   id: string;
   at: string;
-  kind: 'topup' | 'send' | 'receive' | 'convert';
+  kind: 'topup' | 'send' | 'receive' | 'convert' | 'withdraw';
   currency: string;
   amount: string;
+  status?: 'pending' | 'paid' | 'failed';
   counterparty?: string;
   note?: string;
   toCurrency?: string;
@@ -64,4 +65,7 @@ export const api = {
   recipient: (q: string) => request<{ name: string }>(`/recipient?${new URLSearchParams({ q })}`),
   transfer: (to: string, amount: string, currency: string, note: string) =>
     post<{ sentTo: string } & Statement>('/transfer', { to, amount, currency, note }),
+  payouts: () => request<{ status: 'none' | 'incomplete' | 'ready'; currency: string }>('/payouts'),
+  onboardPayouts: () => post<{ url: string }>('/payouts/onboard', {}),
+  withdraw: (amount: string) => post<{ withdrawn: string; currency: string } & Statement>('/withdraw', { amount }),
 };

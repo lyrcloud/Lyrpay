@@ -138,15 +138,10 @@ class TopUp(BaseModel):
 def topup(body: TopUp, request: Request, user: User = Depends(current_user)):
     currency = currency_code(body.currency)
     amount = parse_amount(body.amount, currency)
-    origin = request.headers.get("origin") or ""
-    if origin not in ALLOWED_ORIGINS:
-        origin = ALLOWED_ORIGINS[0]
-    try:
-        session = stripe_client.create_checkout(
-            user_sub=user.sub, email=user.email, amount=amount, currency=currency, origin=origin,
-        )
-    except RuntimeError as error:
-        raise HTTPException(status_code=502, detail=str(error))
+    session = stripe_call(
+        stripe_client.create_checkout,
+        user_sub=user.sub, email=user.email, amount=amount, currency=currency, origin=site_origin(request),
+    )
     return {"url": session["url"]}
 
 
@@ -262,3 +257,72 @@ def transfer(body: Transfer, user: User = Depends(current_user)):
 @app.get("/api/currencies")
 def currencies():
     return {"currencies": {c: exponent(c) for c in sorted(rates.usd_rates()["rates"])}}
+
+
+def site_origin(request: Request) -> str:
+    origin = request.headers.get("origin") or ""
+    return origin if origin in ALLOWED_ORIGINS else ALLOWED_ORIGINS[0]
+
+
+def stripe_call(call, *args, **kwargs):
+    try:
+        return call(*args, **kwargs)
+    except RuntimeError as error:
+        raise HTTPException(status_code=502, detail=str(error))
+
+
+@app.get("/api/payouts")
+def payouts(user: User = Depends(current_user)):
+    """Whether the person can withdraw yet, and in which currency."""
+    profile = ledger.ensure_profile(user)
+    currency = stripe_call(stripe_client.platform)["currency"]
+    account_id = profile.get("payoutAccount")
+    if not account_id:
+        return {"status": "none", "currency": currency}
+    account = stripe_call(stripe_client.get_account, account_id)
+    ready = account.get("payouts_enabled") and account.get("capabilities", {}).get("transfers") == "active"
+    return {"status": "ready" if ready else "incomplete", "currency": currency}
+
+
+@app.post("/api/payouts/onboard")
+def payouts_onboard(request: Request, user: User = Depends(current_user)):
+    """A Stripe link where the person adds their identity and bank details."""
+    profile = ledger.ensure_profile(user)
+    account_id = profile.get("payoutAccount")
+    if not account_id:
+        if not profile.get("country"):
+            raise ValueError("Choose your country first.")
+        account = stripe_call(
+            stripe_client.create_connected_account, user_sub=user.sub, email=user.email, country=profile["country"],
+        )
+        account_id = account["id"]
+        ledger.update_profile(user.sub, payoutAccount=account_id)
+    return {"url": stripe_call(stripe_client.onboarding_link, account_id, site_origin(request))}
+
+
+class Withdraw(BaseModel):
+    amount: str
+
+
+@app.post("/api/withdraw")
+def withdraw(body: Withdraw, user: User = Depends(current_user)):
+    profile = ledger.ensure_profile(user)
+    account_id = profile.get("payoutAccount")
+    if not account_id:
+        raise HTTPException(status_code=409, detail="Set up bank payouts first.")
+    account = stripe_call(stripe_client.get_account, account_id)
+    if not account.get("payouts_enabled"):
+        raise HTTPException(status_code=409, detail="Finish setting up bank payouts first.")
+    currency = stripe_call(stripe_client.platform)["currency"]
+    amount = parse_amount(body.amount, currency)
+    try:
+        tx = ledger.start_withdrawal(user.sub, currency, amount)
+    except ledger.InsufficientFunds:
+        raise HTTPException(status_code=409, detail=f"You don't have enough {currency}. Convert to {currency} first.")
+    try:
+        transfer = stripe_client.transfer_to(account_id, amount, currency, tx["id"])
+    except RuntimeError as error:
+        ledger.fail_withdrawal(tx)
+        raise HTTPException(status_code=502, detail=f"The withdrawal didn't go through, so nothing left your balance. {error}")
+    ledger.finish_withdrawal(tx, transfer["id"])
+    return {"withdrawn": money(amount, currency), "currency": currency, **statement(user.sub)}

@@ -25,11 +25,12 @@ def secret_key() -> str | None:
     return _key or None
 
 
-def _request(method: str, path: str, data: dict | None = None) -> dict:
+def _request(method: str, path: str, data: dict | None = None, idempotency_key: str | None = None) -> dict:
     key = secret_key()
     if not key:
-        raise RuntimeError("Card payments aren't switched on yet.")
-    response = httpx.request(method, f"{API}{path}", data=data, auth=(key, ""), timeout=20)
+        raise RuntimeError("Payments aren't switched on yet.")
+    headers = {"Idempotency-Key": idempotency_key} if idempotency_key else {}
+    response = httpx.request(method, f"{API}{path}", data=data, auth=(key, ""), headers=headers, timeout=20)
     body = response.json()
     if response.status_code >= 400:
         raise RuntimeError(body.get("error", {}).get("message", "Stripe declined the request."))
@@ -65,3 +66,56 @@ def create_checkout(*, user_sub: str, email: str, amount: Decimal, currency: str
 
 def get_checkout(session_id: str) -> dict:
     return _request("GET", f"/checkout/sessions/{session_id}")
+
+
+# Withdrawals: each person gets a Stripe Connect Express account, where Stripe collects their identity and
+# bank details. A withdrawal moves money from the platform balance to that account, and Stripe pays it out
+# to their bank on its usual schedule.
+
+_platform: dict | None = None
+
+
+def platform() -> dict:
+    """The platform's own country and settlement currency; withdrawals are made in that currency."""
+    global _platform
+    if _platform is None:
+        account = _request("GET", "/account")
+        _platform = {"country": account["country"], "currency": account["default_currency"].upper()}
+    return _platform
+
+
+def create_connected_account(*, user_sub: str, email: str, country: str) -> dict:
+    data = {
+        "type": "express",
+        "country": country,
+        "capabilities[transfers][requested]": "true",
+        "metadata[user]": user_sub,
+    }
+    if email:
+        data["email"] = email
+    # Outside the platform's country, accounts can only receive transfers (Stripe's recipient agreement)
+    if country != platform()["country"]:
+        data["tos_acceptance[service_agreement]"] = "recipient"
+    return _request("POST", "/accounts", data, idempotency_key=f"lyrpay-account-{user_sub}-{country}")
+
+
+def get_account(account_id: str) -> dict:
+    return _request("GET", f"/accounts/{account_id}")
+
+
+def onboarding_link(account_id: str, origin: str) -> str:
+    return _request("POST", "/account_links", {
+        "account": account_id,
+        "type": "account_onboarding",
+        "refresh_url": f"{origin}/?payouts=refresh",
+        "return_url": f"{origin}/?payouts=done",
+    })["url"]
+
+
+def transfer_to(account_id: str, amount: Decimal, currency: str, reference: str) -> dict:
+    return _request("POST", "/transfers", {
+        "amount": stripe_amount(amount, currency),
+        "currency": currency.lower(),
+        "destination": account_id,
+        "metadata[lyrpay_tx]": reference,
+    }, idempotency_key=f"lyrpay-withdraw-{reference}")

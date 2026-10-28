@@ -2,11 +2,11 @@ import { useEffect, useState } from 'react';
 import { api, ApiError, type Profile, type Statement } from '../lib/api';
 import { currentUser, signOut } from '../lib/auth';
 import { COUNTRIES, currencyName, currencyOf, flag, formatMoney, guessCountry } from '../lib/format';
-import { AddMoney, Convert, CurrencySelect, SendMoney } from './MoneyActions';
+import { AddMoney, Convert, CurrencySelect, SendMoney, Withdraw } from './MoneyActions';
 import { Activity, Connections, Markets, Rates } from './Panels';
 
 type Tab = 'wallet' | 'markets' | 'rates' | 'connect';
-type Action = 'add' | 'send' | 'convert';
+type Action = 'add' | 'send' | 'convert' | 'withdraw';
 
 export default function Dashboard({ onSignedOut }: { onSignedOut: () => void }) {
   const user = currentUser();
@@ -42,6 +42,13 @@ export default function Dashboard({ onSignedOut }: { onSignedOut: () => void }) 
     // Back from Stripe Checkout
     const params = new URLSearchParams(location.search);
     const topup = params.get('topup');
+    // Back from Stripe's bank-account setup
+    const payouts = params.get('payouts');
+    if (payouts) {
+      history.replaceState(null, '', '/');
+      setAction('withdraw');
+      if (payouts === 'done') setNotice('Bank details saved with Stripe.');
+    }
     if (topup) {
       history.replaceState(null, '', '/');
       if (topup === 'cancelled') setNotice('Payment cancelled. Nothing was charged.');
@@ -120,15 +127,16 @@ export default function Dashboard({ onSignedOut }: { onSignedOut: () => void }) 
 
             <section className="card">
               <div className="tabs" role="tablist">
-                {(['add', 'send', 'convert'] as Action[]).map(a => (
+                {(['add', 'send', 'convert', 'withdraw'] as Action[]).map(a => (
                   <button key={a} role="tab" aria-selected={action === a} onClick={() => setAction(a)}>
-                    {{ add: 'Add money', send: 'Send', convert: 'Convert' }[a]}
+                    {{ add: 'Add', send: 'Send', convert: 'Convert', withdraw: 'Withdraw' }[a]}
                   </button>
                 ))}
               </div>
               {action === 'add' && <AddMoney {...shared} cardPayments={cardPayments} />}
               {action === 'send' && <SendMoney {...shared} />}
               {action === 'convert' && <Convert {...shared} />}
+              {action === 'withdraw' && <Withdraw {...shared} enabled={cardPayments} />}
             </section>
 
             <section className="card span-2">
