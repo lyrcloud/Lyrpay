@@ -19,10 +19,12 @@ output() {
 CERTIFICATE_ARN=${CERTIFICATE_ARN:-$(aws cloudformation describe-stacks --stack-name "$STACK" --region "$REGION" \
   --query "Stacks[0].Parameters[?ParameterKey=='CertificateArn'].ParameterValue" --output text 2>/dev/null || true)}
 [ "$CERTIFICATE_ARN" = "None" ] && CERTIFICATE_ARN=""
+CERT_OVERRIDE=()
+[ -n "$CERTIFICATE_ARN" ] && CERT_OVERRIDE=("CertificateArn=$CERTIFICATE_ARN")
 
 deploy_stack() {
   sam deploy --stack-name "$STACK" --region "$REGION" --resolve-s3 --capabilities CAPABILITY_IAM \
-    --no-confirm-changeset --no-fail-on-empty-changeset --parameter-overrides "PrimaryOrigin=$1" "CertificateArn=${CERTIFICATE_ARN:-}"
+    --no-confirm-changeset --no-fail-on-empty-changeset --parameter-overrides "PrimaryOrigin=$1" "${CERT_OVERRIDE[@]}"
 }
 
 echo "Building API..."
