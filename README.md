@@ -25,7 +25,7 @@ frontend/   React + Vite dashboard; lib/auth.ts is the Cognito helper (same flow
 template.yaml  DynamoDB ledger, API Lambda + Function URL, Lyrpay's app client in the Lyr account pool,
                S3 + CloudFront (serves /api/* from the Lambda, so the site and API share an origin)
 deploy.sh   builds and deploys all of it
-mobile/     Expo app from the original scaffold, not yet moved to the new API
+mobile/     Expo app: live crypto prices and rates from the API, opens the web wallet for sign-in
 ```
 
 ## Deploy

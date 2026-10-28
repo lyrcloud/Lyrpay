@@ -1,31 +1,48 @@
 import { StatusBar } from 'expo-status-bar';
-import { SafeAreaView, StyleSheet, Text, View, Button } from 'react-native';
+import { Button, FlatList, Linking, SafeAreaView, StyleSheet, Text, View } from 'react-native';
 import { useEffect, useState } from 'react';
-import { fetchMarketTicker, fetchWalletBalance } from './src/services/api';
+import { Coin, SITE_URL, fetchCrypto, fetchRates } from './src/services/api';
+
+const WATCHED = ['EUR', 'GBP', 'INR', 'JPY', 'NGN', 'BDT', 'MXN', 'PHP'];
 
 export default function App() {
-  const [market, setMarket] = useState({ symbol: 'BTCUSDT', price: 0 });
-  const [balance, setBalance] = useState({ USD: 0, BTC: 0 });
+  const [coins, setCoins] = useState<Coin[]>([]);
+  const [rates, setRates] = useState<Record<string, number>>({});
+  const [error, setError] = useState('');
 
-  useEffect(() => {
-    fetchMarketTicker('BTCUSDT').then(setMarket);
-    fetchWalletBalance().then((data) => setBalance({ USD: data.balances.USD, BTC: data.balances.BTC }));
-  }, []);
+  const refresh = () => {
+    setError('');
+    fetchCrypto().then(r => setCoins(r.coins.slice(0, 10))).catch(() => setError('Markets are unavailable right now.'));
+    fetchRates().then(r => setRates(r.rates)).catch(() => setError('Rates are unavailable right now.'));
+  };
+
+  useEffect(refresh, []);
 
   return (
     <SafeAreaView style={styles.container}>
-      <Text style={styles.title}>Lyrpay Mobile</Text>
+      <Text style={styles.title}>Lyrpay</Text>
+      {/* Balances, payments and sign-in live in the web wallet until the app has its own sign-in */}
+      <Button title="Open my wallet" onPress={() => Linking.openURL(SITE_URL)} />
+      {!!error && <Text style={styles.error}>{error}</Text>}
       <View style={styles.card}>
-        <Text style={styles.heading}>Market</Text>
-        <Text>{market.symbol}</Text>
-        <Text>{market.price.toFixed(2)} USD</Text>
+        <Text style={styles.heading}>1 USD in</Text>
+        {WATCHED.filter(c => rates[c]).map(c => (
+          <Text key={c} style={styles.row}>{c}  {rates[c].toFixed(2)}</Text>
+        ))}
       </View>
-      <View style={styles.card}>
-        <Text style={styles.heading}>Balances</Text>
-        <Text>USD {balance.USD.toFixed(2)}</Text>
-        <Text>BTC {balance.BTC}</Text>
+      <View style={[styles.card, styles.grow]}>
+        <Text style={styles.heading}>Crypto</Text>
+        <FlatList
+          data={coins}
+          keyExtractor={c => c.id}
+          renderItem={({ item }) => (
+            <Text style={styles.row}>
+              {item.symbol}  ${item.price.toLocaleString()}  {item.change24h?.toFixed(2) ?? '–'}%
+            </Text>
+          )}
+        />
       </View>
-      <Button title="Refresh" onPress={() => { fetchMarketTicker('BTCUSDT').then(setMarket); fetchWalletBalance().then((data) => setBalance({ USD: data.balances.USD, BTC: data.balances.BTC })); }} />
+      <Button title="Refresh" onPress={refresh} />
       <StatusBar style="light" />
     </SafeAreaView>
   );
@@ -34,26 +51,35 @@ export default function App() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#050816',
-    alignItems: 'center',
-    justifyContent: 'center',
+    backgroundColor: '#0b1020',
     padding: 20,
+    gap: 12,
   },
   title: {
     fontSize: 28,
-    color: '#e2e8f0',
-    marginBottom: 20,
+    fontWeight: '700',
+    color: '#eef0fa',
+    marginTop: 12,
   },
   card: {
     width: '100%',
-    backgroundColor: '#0f172a',
-    borderRadius: 18,
-    padding: 18,
-    marginBottom: 16,
+    backgroundColor: '#131a2e',
+    borderRadius: 14,
+    padding: 16,
+  },
+  grow: {
+    flex: 1,
   },
   heading: {
-    fontSize: 18,
-    color: '#93c5fd',
-    marginBottom: 10,
+    fontSize: 16,
+    color: '#7b7bff',
+    marginBottom: 8,
+  },
+  row: {
+    color: '#eef0fa',
+    paddingVertical: 3,
+  },
+  error: {
+    color: '#ff7a7a',
   },
 });
