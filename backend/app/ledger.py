@@ -1,10 +1,10 @@
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import boto3
-from boto3.dynamodb.conditions import Key
+from boto3.dynamodb.conditions import Attr, Key
 from botocore.exceptions import ClientError
 
 from app.auth import User
@@ -125,6 +125,15 @@ def transactions(sub: str, limit: int = 50) -> list[dict]:
         ScanIndexForward=False, Limit=limit,
     )["Items"]
     return [{k: v for k, v in item.items() if k not in ("pk", "sk")} for item in items]
+
+
+def pending_withdrawals(sub: str, older_than_seconds: int = 60) -> list[dict]:
+    """Withdrawals whose Stripe transfer had no clear answer, old enough that no request is still working on them."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(seconds=older_than_seconds)).isoformat(timespec="milliseconds")
+    return table().query(
+        KeyConditionExpression=Key("pk").eq(f"USER#{sub}") & Key("sk").between("TX#", f"TX#{cutoff}"),
+        FilterExpression=Attr("kind").eq("withdraw") & Attr("status").eq("pending"),
+    )["Items"]
 
 
 def find_recipient(handle: str) -> dict | None:

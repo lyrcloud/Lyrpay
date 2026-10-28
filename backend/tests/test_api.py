@@ -128,6 +128,7 @@ def payouts_ready(monkeypatch):
     monkeypatch.setattr(stripe_client, "get_account", lambda _: {"payouts_enabled": True, "capabilities": {"transfers": "active"}})
     monkeypatch.setattr(stripe_client, "create_connected_account", lambda **_: {"id": "acct_1"})
     monkeypatch.setattr(stripe_client, "onboarding_link", lambda account, origin: f"https://connect.stripe.com/{account}")
+    monkeypatch.setattr(stripe_client, "find_transfer", lambda account, reference: None)
 
 
 def test_withdraw_after_onboarding(as_user, payouts_ready, monkeypatch):
@@ -150,7 +151,7 @@ def test_withdraw_after_onboarding(as_user, payouts_ready, monkeypatch):
 
 def test_refused_withdrawal_restores_balance(as_user, payouts_ready, monkeypatch):
     def refuse(*_):
-        raise RuntimeError("Insufficient platform balance.")
+        raise stripe_client.StripeError("Insufficient platform balance.", definitive=True)
     monkeypatch.setattr(stripe_client, "transfer_to", refuse)
     client = as_user(ALICE)
     client.post("/api/topup/confirm", json={"sessionId": "cs_test_w2"})
@@ -160,3 +161,44 @@ def test_refused_withdrawal_restores_balance(as_user, payouts_ready, monkeypatch
     me = client.get("/api/me").json()
     assert me["balances"] == {"USD": "50.00"}
     assert me["transactions"][0]["status"] == "failed"
+
+
+def test_unanswered_withdrawal_is_settled_later(as_user, payouts_ready, monkeypatch):
+    def no_answer(*_):
+        raise stripe_client.StripeError("Stripe didn't answer in time.", definitive=False)
+    monkeypatch.setattr(stripe_client, "transfer_to", no_answer)
+    client = as_user(ALICE)
+    client.post("/api/topup/confirm", json={"sessionId": "cs_test_w3"})
+    client.patch("/api/me", json={"country": "US"})
+    client.post("/api/payouts/onboard")
+    result = client.post("/api/withdraw", json={"amount": "10"}).json()
+    assert result["status"] == "pending" and result["balances"] == {"USD": "40.00"}
+    tx_id = result["transactions"][0]["id"]
+
+    # Too recent to touch: a request may still be working on it
+    assert client.get("/api/me").json()["transactions"][0]["status"] == "pending"
+
+    # Stripe did make the transfer: it's found and recorded, never sent twice
+    sent = []
+    monkeypatch.setattr(ledger, "pending_withdrawals", lambda sub, older_than_seconds=60: original(sub, 0))
+    monkeypatch.setattr(stripe_client, "find_transfer", lambda account, reference: {"id": "tr_found"} if reference == tx_id else None)
+    monkeypatch.setattr(stripe_client, "transfer_to", lambda *args: sent.append(args) or {"id": "tr_new"})
+    me = client.get("/api/me").json()
+    assert me["transactions"][0]["status"] == "paid" and me["transactions"][0]["reference"] == "tr_found"
+    assert sent == [] and me["balances"] == {"USD": "40.00"}
+
+
+def test_unanswered_withdrawal_is_retried_when_stripe_has_none(as_user, payouts_ready, monkeypatch):
+    monkeypatch.setattr(stripe_client, "transfer_to", lambda *_: (_ for _ in ()).throw(stripe_client.StripeError("timeout", definitive=False)))
+    client = as_user(ALICE)
+    client.post("/api/topup/confirm", json={"sessionId": "cs_test_w4"})
+    client.patch("/api/me", json={"country": "US"})
+    client.post("/api/payouts/onboard")
+    client.post("/api/withdraw", json={"amount": "10"})
+
+    monkeypatch.setattr(ledger, "pending_withdrawals", lambda sub, older_than_seconds=60: original(sub, 0))
+    monkeypatch.setattr(stripe_client, "transfer_to", lambda *_: {"id": "tr_retry"})
+    assert client.get("/api/me").json()["transactions"][0]["status"] == "paid"
+
+
+original = ledger.pending_withdrawals

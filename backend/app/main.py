@@ -1,3 +1,4 @@
+import logging
 import os
 import re
 from decimal import Decimal
@@ -17,6 +18,8 @@ FX_FEE_BPS = Decimal(os.getenv("FX_FEE_BPS", "50"))
 ALLOWED_ORIGINS = [o for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:5173").split(",") if o]
 CURRENCY = re.compile(r"^[A-Z]{3}$")
 PHONE = re.compile(r"^\+[1-9]\d{7,14}$")
+
+logger = logging.getLogger("lyrpay")
 
 app = FastAPI(title="Lyrpay API", version="1.0.0")
 app.add_middleware(
@@ -89,6 +92,7 @@ async def phone_auth(action: str, request: Request):
 @app.get("/api/me")
 def me(user: User = Depends(current_user)):
     profile = ledger.ensure_profile(user)
+    settle_withdrawals(user.sub, profile)
     return {
         "profile": {k: profile.get(k, "") for k in ("name", "email", "phone", "currency", "country")},
         **statement(user.sub),
@@ -153,10 +157,7 @@ class TopUpConfirm(BaseModel):
 def topup_confirm(body: TopUpConfirm, user: User = Depends(current_user)):
     if not re.match(r"^cs_[A-Za-z0-9_]+$", body.sessionId):
         raise ValueError("That payment link isn't valid.")
-    try:
-        session = stripe_client.get_checkout(body.sessionId)
-    except RuntimeError as error:
-        raise HTTPException(status_code=502, detail=str(error))
+    session = stripe_call(stripe_client.get_checkout, body.sessionId)
     if session.get("client_reference_id") != user.sub:
         raise HTTPException(status_code=409, detail="That payment belongs to another account.")
     if session.get("payment_status") != "paid":
@@ -267,8 +268,35 @@ def site_origin(request: Request) -> str:
 def stripe_call(call, *args, **kwargs):
     try:
         return call(*args, **kwargs)
-    except RuntimeError as error:
+    except stripe_client.StripeError as error:
         raise HTTPException(status_code=502, detail=str(error))
+
+
+def send_withdrawal(tx: dict, account_id: str) -> str:
+    """Make sure Stripe has the transfer for a pending withdrawal and record the outcome:
+    'paid', 'failed' (balance restored) or 'pending' (Stripe's answer is still unknown)."""
+    try:
+        transfer = stripe_client.find_transfer(account_id, tx["id"]) or stripe_client.transfer_to(
+            account_id, -tx["amount"], tx["currency"], tx["id"],
+        )
+    except stripe_client.StripeError as error:
+        if not error.definitive:
+            return "pending"
+        ledger.fail_withdrawal(tx)
+        return "failed"
+    ledger.finish_withdrawal(tx, transfer["id"])
+    return "paid"
+
+
+def settle_withdrawals(sub: str, profile: dict):
+    """Finish withdrawals left pending when Stripe didn't answer, each time the person opens their wallet."""
+    if not profile.get("payoutAccount"):
+        return
+    for tx in ledger.pending_withdrawals(sub):
+        try:
+            send_withdrawal(tx, profile["payoutAccount"])
+        except Exception:
+            logger.exception("Settling withdrawal %s failed", tx["id"])
 
 
 @app.get("/api/payouts")
@@ -319,10 +347,7 @@ def withdraw(body: Withdraw, user: User = Depends(current_user)):
         tx = ledger.start_withdrawal(user.sub, currency, amount)
     except ledger.InsufficientFunds:
         raise HTTPException(status_code=409, detail=f"You don't have enough {currency}. Convert to {currency} first.")
-    try:
-        transfer = stripe_client.transfer_to(account_id, amount, currency, tx["id"])
-    except RuntimeError as error:
-        ledger.fail_withdrawal(tx)
-        raise HTTPException(status_code=502, detail=f"The withdrawal didn't go through, so nothing left your balance. {error}")
-    ledger.finish_withdrawal(tx, transfer["id"])
-    return {"withdrawn": money(amount, currency), "currency": currency, **statement(user.sub)}
+    outcome = send_withdrawal(tx, account_id)
+    if outcome == "failed":
+        raise HTTPException(status_code=502, detail="Stripe refused the withdrawal, so nothing left your balance.")
+    return {"withdrawn": money(amount, currency), "currency": currency, "status": outcome, **statement(user.sub)}

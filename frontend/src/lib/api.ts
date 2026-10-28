@@ -67,5 +67,5 @@ export const api = {
     post<{ sentTo: string } & Statement>('/transfer', { to, amount, currency, note }),
   payouts: () => request<{ status: 'none' | 'incomplete' | 'ready'; currency: string }>('/payouts'),
   onboardPayouts: () => post<{ url: string }>('/payouts/onboard', {}),
-  withdraw: (amount: string) => post<{ withdrawn: string; currency: string } & Statement>('/withdraw', { amount }),
+  withdraw: (amount: string) => post<{ withdrawn: string; currency: string; status: 'paid' | 'pending' } & Statement>('/withdraw', { amount }),
 };

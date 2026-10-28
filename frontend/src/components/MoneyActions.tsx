@@ -179,7 +179,9 @@ export function Withdraw({ balances, onStatement, onNotice, enabled }: Props & {
   const submit = run(async () => {
     const result = await api.withdraw(amount);
     onStatement(result);
-    onNotice(`${formatMoney(result.withdrawn, result.currency)} is on its way to your bank.`);
+    onNotice(result.status === 'paid'
+      ? `${formatMoney(result.withdrawn, result.currency)} is on its way to your bank.`
+      : `Your ${formatMoney(result.withdrawn, result.currency)} withdrawal is processing. We'll finish it shortly; it won't be sent twice.`);
     setAmount('');
   });
 

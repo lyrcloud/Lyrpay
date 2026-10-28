@@ -12,6 +12,14 @@ SECRET_ID = os.getenv("STRIPE_SECRET_ID", "lyrpay/stripe")
 _key: str | None = None
 
 
+class StripeError(RuntimeError):
+    """definitive: Stripe answered and refused (4xx). Otherwise the outcome is unknown and the call may have worked."""
+
+    def __init__(self, message: str, definitive: bool):
+        super().__init__(message)
+        self.definitive = definitive
+
+
 def secret_key() -> str | None:
     """The Stripe secret key: STRIPE_SECRET_KEY locally, else the lyrpay/stripe secret. None until one is set."""
     global _key
@@ -25,15 +33,21 @@ def secret_key() -> str | None:
     return _key or None
 
 
-def _request(method: str, path: str, data: dict | None = None, idempotency_key: str | None = None) -> dict:
+def _request(
+    method: str, path: str, data: dict | None = None, idempotency_key: str | None = None, params: dict | None = None,
+) -> dict:
     key = secret_key()
     if not key:
-        raise RuntimeError("Payments aren't switched on yet.")
+        raise StripeError("Payments aren't switched on yet.", definitive=True)
     headers = {"Idempotency-Key": idempotency_key} if idempotency_key else {}
-    response = httpx.request(method, f"{API}{path}", data=data, auth=(key, ""), headers=headers, timeout=20)
-    body = response.json()
+    try:
+        response = httpx.request(method, f"{API}{path}", params=params, data=data, auth=(key, ""), headers=headers, timeout=20)
+        body = response.json()
+    except (httpx.HTTPError, ValueError):
+        raise StripeError("Stripe didn't answer in time.", definitive=False)
     if response.status_code >= 400:
-        raise RuntimeError(body.get("error", {}).get("message", "Stripe declined the request."))
+        message = body.get("error", {}).get("message", "Stripe declined the request.")
+        raise StripeError(message, definitive=response.status_code < 500)
     return body
 
 
@@ -119,3 +133,10 @@ def transfer_to(account_id: str, amount: Decimal, currency: str, reference: str)
         "destination": account_id,
         "metadata[lyrpay_tx]": reference,
     }, idempotency_key=f"lyrpay-withdraw-{reference}")
+
+
+def find_transfer(account_id: str, reference: str) -> dict | None:
+    """The transfer made for a Lyrpay withdrawal, if Stripe has one. Checked before any retry, since
+    idempotency keys only last 24 hours."""
+    transfers = _request("GET", "/transfers", params={"destination": account_id, "limit": 100})["data"]
+    return next((t for t in transfers if t.get("metadata", {}).get("lyrpay_tx") == reference), None)
