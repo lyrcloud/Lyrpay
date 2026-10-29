@@ -1,6 +1,7 @@
 import logging
 import os
 import re
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import httpx
@@ -16,6 +17,8 @@ from app.money import exponent, from_minor, parse_amount, quantize
 # Spread on currency conversions, in basis points (50 = 0.5%)
 FX_FEE_BPS = Decimal(os.getenv("FX_FEE_BPS", "50"))
 ALLOWED_ORIGINS = [o for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:5173").split(",") if o]
+# Super admins: verified emails that can open the admin overview
+ADMIN_EMAILS = {e.strip().lower() for e in os.getenv("ADMIN_EMAILS", "lyrclouds@gmail.com").split(",") if e.strip()}
 CURRENCY = re.compile(r"^[A-Z]{3}$")
 PHONE = re.compile(r"^\+[1-9]\d{7,14}$")
 
@@ -99,7 +102,96 @@ def me(user: User = Depends(current_user)):
         logger.exception("Welcome email for %s failed", user.sub)
     return {
         "profile": {k: profile.get(k, "") for k in ("name", "email", "phone", "currency", "country")},
+        "admin": is_admin(user),
         **statement(user.sub),
+    }
+
+
+def is_admin(user: User) -> bool:
+    # user.email is only set when the email is verified, so nobody can claim an admin address
+    return bool(user.email) and user.email in ADMIN_EMAILS
+
+
+def admin_user(user: User = Depends(current_user)) -> User:
+    if not is_admin(user):
+        raise HTTPException(status_code=403, detail="Only Lyrpay admins can see this.")
+    return user
+
+
+@app.get("/api/admin/overview")
+def admin_overview(days: int = 14, _: User = Depends(admin_user)):
+    """Everyone's accounts, money held and activity, valued in US dollars at today's rates."""
+    days = max(1, min(days, 90))
+    usd = rates.usd_rates()["rates"]
+
+    def in_usd(amount, currency: str) -> float:
+        return float(Decimal(str(amount)) / Decimal(str(usd[currency]))) if currency in usd else 0.0
+
+    data = ledger.everything()
+    names = {p["pk"]: p.get("name") or p.get("email") or p.get("phone") or "" for p in data["profiles"]}
+
+    held: dict[str, Decimal] = {}
+    held_by_user: dict[str, float] = {}
+    for item in data["balances"]:
+        currency, amount = item["currency"], item["amount"]
+        if amount:
+            held[currency] = held.get(currency, Decimal(0)) + amount
+            held_by_user[item["pk"]] = held_by_user.get(item["pk"], 0.0) + in_usd(amount, currency)
+
+    today = datetime.now(timezone.utc).date()
+    daily = {(today - timedelta(days=i)).isoformat(): {"signups": 0, "volumeUsd": 0.0, "count": 0} for i in range(days)}
+    by_kind: dict[str, dict] = {}
+    pending = 0
+    for tx in data["transactions"]:
+        kind, value = tx["kind"], abs(in_usd(tx["amount"], tx["currency"]))
+        bucket = by_kind.setdefault(kind, {"count": 0, "volumeUsd": 0.0})
+        bucket["count"] += 1
+        bucket["volumeUsd"] += value
+        day = daily.get(tx["at"][:10])
+        # A transfer is two lines (send and receive); count its money once
+        if day and kind != "receive":
+            day["count"] += 1
+            day["volumeUsd"] += value
+        pending += tx.get("status") == "pending"
+    for profile in data["profiles"]:
+        day = daily.get(str(profile.get("created", ""))[:10])
+        if day:
+            day["signups"] += 1
+
+    recent = sorted(data["transactions"], key=lambda tx: tx["at"], reverse=True)[:30]
+    users = sorted(data["profiles"], key=lambda p: str(p.get("created", "")), reverse=True)
+    return {
+        "updated": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "totals": {
+            "users": len(users),
+            "newUsers": sum(d["signups"] for d in daily.values()),
+            "heldUsd": round(sum(in_usd(a, c) for c, a in held.items()), 2),
+            "transactions": len(data["transactions"]),
+            "volumeUsd": round(sum(b["volumeUsd"] for k, b in by_kind.items() if k != "receive"), 2),
+            "pendingWithdrawals": pending,
+            "unsubscribed": len(data["optouts"]),
+        },
+        "held": sorted(
+            ({"currency": c, "amount": money(a, c), "usd": round(in_usd(a, c), 2)} for c, a in held.items()),
+            key=lambda h: h["usd"], reverse=True,
+        ),
+        "byKind": {k: {"count": b["count"], "volumeUsd": round(b["volumeUsd"], 2)} for k, b in by_kind.items()},
+        "daily": [{"date": d, **v, "volumeUsd": round(v["volumeUsd"], 2)} for d, v in sorted(daily.items())],
+        "users": [
+            {
+                "name": p.get("name", ""), "email": p.get("email", ""), "phone": p.get("phone", ""),
+                "country": p.get("country", ""), "currency": p.get("currency", ""), "created": p.get("created", ""),
+                "heldUsd": round(held_by_user.get(p["pk"], 0.0), 2), "payouts": bool(p.get("payoutAccount")),
+            }
+            for p in users
+        ],
+        "recent": [
+            {
+                "id": tx["id"], "at": tx["at"], "kind": tx["kind"], "currency": tx["currency"], "amount": str(tx["amount"]),
+                "status": tx.get("status", ""), "user": names.get(tx["pk"], ""), "counterparty": tx.get("counterparty", ""),
+            }
+            for tx in recent
+        ],
     }
 
 

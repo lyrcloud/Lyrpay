@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
-import { api, type Coin, type Transaction } from '../lib/api';
-import { currencyName, formatDate, formatMoney, formatPrice } from '../lib/format';
+import { useState } from 'react';
+import { type Transaction } from '../lib/api';
+import { formatDate, formatMoney } from '../lib/format';
 
 const KIND_LABEL: Record<Transaction['kind'], string> = {
   topup: 'Added money', send: 'Sent', receive: 'Received', convert: 'Converted', withdraw: 'Withdrew to bank',
@@ -33,73 +33,6 @@ export function Activity({ transactions }: { transactions: Transaction[] }) {
         );
       })}
     </ul>
-  );
-}
-
-export function Markets({ home }: { home: string }) {
-  const [coins, setCoins] = useState<Coin[] | null>(null);
-  const [vs, setVs] = useState(home);
-  const [error, setError] = useState('');
-
-  useEffect(() => {
-    setError('');
-    // CoinGecko prices in the person's currency when it has one, else US dollars
-    api.crypto(vs).then(r => setCoins(r.coins)).catch(() => (vs === 'USD' ? setError('Crypto prices are unavailable right now.') : setVs('USD')));
-  }, [vs]);
-
-  if (error) return <p className="error">{error}</p>;
-  if (!coins) return <p className="empty">Loading markets…</p>;
-  return (
-    <div className="table-wrap">
-      <table className="table">
-        <thead><tr><th>#</th><th>Asset</th><th className="num">Price</th><th className="num">24h</th><th className="num hide-sm">Market cap</th></tr></thead>
-        <tbody>
-          {coins.map((coin, i) => (
-            <tr key={coin.id}>
-              <td className="muted">{i + 1}</td>
-              <td><span className="asset"><img src={coin.image} alt="" width={20} height={20} loading="lazy" />{coin.name} <span className="muted">{coin.symbol}</span></span></td>
-              <td className="num">{formatPrice(coin.price, vs)}</td>
-              <td className={`num ${(coin.change24h ?? 0) >= 0 ? 'positive' : 'negative'}`}>{coin.change24h?.toFixed(2) ?? '–'}%</td>
-              <td className="num hide-sm">{coin.marketCap ? new Intl.NumberFormat(undefined, { style: 'currency', currency: vs, notation: 'compact' }).format(coin.marketCap) : '–'}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-export function Rates({ home, rates, updated }: { home: string; rates: Record<string, number>; updated: string }) {
-  const [query, setQuery] = useState('');
-  const rows = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return Object.keys(rates)
-      .filter(c => c !== home)
-      .map(code => ({ code, name: currencyName(code), rate: rates[code] }))
-      .filter(r => !q || r.code.toLowerCase().includes(q) || r.name.toLowerCase().includes(q));
-  }, [rates, home, query]);
-
-  return (
-    <>
-      <div className="panel-tools">
-        <input type="search" placeholder="Search currency or country" value={query} onChange={e => setQuery(e.target.value)} />
-        <span className="muted">Mid-market · updated {updated ? formatDate(updated) : '…'}</span>
-      </div>
-      <div className="table-wrap">
-        <table className="table">
-          <thead><tr><th>Currency</th><th className="num">1 {home} =</th><th className="num hide-sm">1 unit =</th></tr></thead>
-          <tbody>
-            {rows.map(r => (
-              <tr key={r.code}>
-                <td><strong>{r.code}</strong> <span className="muted">{r.name}</span></td>
-                <td className="num">{r.rate.toPrecision(6)} {r.code}</td>
-                <td className="num hide-sm">{formatPrice(1 / r.rate, home)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </>
   );
 }
 

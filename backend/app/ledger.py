@@ -290,3 +290,19 @@ def claim_update(campaign: str, email: str) -> bool:
 
 def release_update(campaign: str, email: str):
     table().delete_item(Key={"pk": f"UPDATE#{campaign}", "sk": email})
+
+
+def everything() -> dict[str, list[dict]]:
+    """The whole ledger in one scan, grouped for the admin overview: profiles, balances, transactions, opt-outs."""
+    groups: dict[str, list[dict]] = {"profiles": [], "balances": [], "transactions": [], "optouts": []}
+    for item in _scan():
+        sk = item["sk"]
+        if sk == "PROFILE":
+            groups["profiles"].append(item)
+        elif sk.startswith("BAL#"):
+            groups["balances"].append(item)
+        elif sk.startswith("TX#"):
+            groups["transactions"].append(item)
+        elif sk == "OPTOUT":
+            groups["optouts"].append(item)
+    return groups

@@ -5,17 +5,19 @@ import httpx
 
 # Mid-market rates for every currency open.er-api.com covers (~165), refreshed
 # at most every 10 minutes per warm Lambda. The source updates once a day.
+# Crypto prices move all the time, so they are kept for a minute.
 FX_URL = "https://open.er-api.com/v6/latest/USD"
 CRYPTO_URL = "https://api.coingecko.com/api/v3/coins/markets"
 TTL_SECONDS = 600
+CRYPTO_TTL_SECONDS = 60
 
 _cache: dict[str, tuple[float, object]] = {}
 _http = httpx.Client(timeout=10)
 
 
-def _cached(key: str, load):
+def _cached(key: str, load, ttl: int = TTL_SECONDS):
     hit = _cache.get(key)
-    if hit and time.time() - hit[0] < TTL_SECONDS:
+    if hit and time.time() - hit[0] < ttl:
         return hit[1]
     try:
         value = load()
@@ -50,15 +52,17 @@ def crypto_markets(vs_currency: str = "usd") -> list:
     def load():
         response = _http.get(CRYPTO_URL, params={
             "vs_currency": vs_currency.lower(), "order": "market_cap_desc", "per_page": 50, "page": 1,
-            "price_change_percentage": "24h",
+            "price_change_percentage": "24h", "sparkline": "true",
         })
         return [
             {
                 "id": c["id"], "symbol": c["symbol"].upper(), "name": c["name"], "image": c["image"],
                 "price": c["current_price"], "change24h": c.get("price_change_percentage_24h"),
                 "marketCap": c.get("market_cap"),
+                # Hourly prices over 7 days, thinned to every 6th for a small chart
+                "sparkline": (c.get("sparkline_in_7d") or {}).get("price", [])[::6],
             }
             for c in response.raise_for_status().json()
         ]
 
-    return _cached(f"crypto:{vs_currency.lower()}", load)
+    return _cached(f"crypto:{vs_currency.lower()}", load, CRYPTO_TTL_SECONDS)

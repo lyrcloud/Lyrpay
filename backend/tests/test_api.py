@@ -282,3 +282,33 @@ def test_failed_update_send_can_be_retried(as_user, monkeypatch):
     assert mail.send_update("lyrpay-live-2026-10", dry_run=False)["failed"] == 1
     monkeypatch.setattr(mail, "send", lambda *args, **kwargs: None)
     assert mail.send_update("lyrpay-live-2026-10", dry_run=False)["sent"] == 1
+
+
+ADMIN = User(sub="admin", email="lyrclouds@gmail.com", phone="", name="Lyr Admin")
+
+
+def test_only_the_super_admin_sees_the_overview(as_user, monkeypatch):
+    monkeypatch.setattr(stripe_client, "get_checkout", lambda _: paid_session("alice"))
+    as_user(BOB).get("/api/me")
+    alice = as_user(ALICE)
+    assert alice.get("/api/me").json()["admin"] is False
+    alice.post("/api/topup/confirm", json={"sessionId": "cs_test_admin"})
+    alice.post("/api/transfer", json={"to": "+14155552671", "amount": "10", "currency": "USD"})
+    assert alice.get("/api/admin/overview").status_code == 403
+
+    admin = as_user(ADMIN)
+    assert admin.get("/api/me").json()["admin"] is True
+    overview = admin.get("/api/admin/overview").json()
+    assert overview["totals"]["users"] == 3
+    assert overview["totals"]["heldUsd"] == 50.0
+    # 50 added + 10 sent; the matching receive isn't counted twice
+    assert overview["totals"]["volumeUsd"] == 60.0
+    assert overview["byKind"]["receive"]["count"] == 1
+    assert {u["email"] for u in overview["users"]} >= {"alice@example.com", "lyrclouds@gmail.com"}
+    assert overview["recent"][0]["kind"] in ("send", "receive")
+
+
+def test_unverified_admin_email_is_not_admin(as_user):
+    # Without a verified email the claims give no email, so the address can't be borrowed
+    claims = {"sub": "x", "email": "lyrclouds@gmail.com", "email_verified": "false"}
+    assert as_user(user_from_claims(claims)).get("/api/admin/overview").status_code == 403

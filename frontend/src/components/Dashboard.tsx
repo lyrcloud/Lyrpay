@@ -2,10 +2,14 @@ import { useEffect, useState } from 'react';
 import { api, ApiError, type Profile, type Statement } from '../lib/api';
 import { currentUser, signOut } from '../lib/auth';
 import { COUNTRIES, currencyName, currencyOf, flag, formatMoney, guessCountry } from '../lib/format';
+import Admin from './Admin';
+import LiveMarkets, { Ticker } from './LiveMarkets';
+import Logo from './Logo';
 import { AddMoney, Convert, CurrencySelect, SendMoney, Withdraw } from './MoneyActions';
-import { Activity, Connections, Markets, Rates } from './Panels';
+import { Activity, Connections } from './Panels';
 
-type Tab = 'wallet' | 'markets' | 'rates' | 'connect';
+type Tab = 'wallet' | 'markets' | 'connect' | 'admin';
+const TABS: Tab[] = ['wallet', 'markets', 'connect', 'admin'];
 type Action = 'add' | 'send' | 'convert' | 'withdraw';
 
 export default function Dashboard({ onSignedOut }: { onSignedOut: () => void }) {
@@ -14,7 +18,13 @@ export default function Dashboard({ onSignedOut }: { onSignedOut: () => void }) 
   const [statement, setStatement] = useState<Statement>({ balances: {}, transactions: [] });
   const [rates, setRates] = useState<{ rates: Record<string, number>; updated: string }>({ rates: {}, updated: '' });
   const [cardPayments, setCardPayments] = useState(false);
-  const [tab, setTab] = useState<Tab>('wallet');
+  const [admin, setAdmin] = useState(false);
+  // The tab is kept in the address (lyrpay.com/#admin), so it can be bookmarked and survives a reload
+  const [tab, setTabState] = useState<Tab>(() => TABS.find(t => `#${t}` === location.hash) ?? 'wallet');
+  const setTab = (next: Tab) => {
+    setTabState(next);
+    history.replaceState(null, '', next === 'wallet' ? location.pathname : `#${next}`);
+  };
   const [action, setAction] = useState<Action>('add');
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
@@ -29,8 +39,10 @@ export default function Dashboard({ onSignedOut }: { onSignedOut: () => void }) 
 
   useEffect(() => {
     api.config().then(c => setCardPayments(c.cardPayments)).catch(() => {});
-    api.me().then(async ({ profile, ...rest }) => {
+    api.me().then(async ({ profile, admin, ...rest }) => {
       setStatement(rest);
+      setAdmin(admin);
+      if (!admin) setTabState(t => (t === 'admin' ? 'wallet' : t));
       // First visit: home country and currency from the browser
       if (!profile.country) {
         const country = guessCountry();
@@ -81,11 +93,11 @@ export default function Dashboard({ onSignedOut }: { onSignedOut: () => void }) 
   return (
     <div className="shell">
       <header className="topbar">
-        <div className="brand"><span className="logo">L</span> Lyrpay</div>
+        <Logo />
         <nav className="nav" aria-label="Sections">
-          {(['wallet', 'markets', 'rates', 'connect'] as Tab[]).map(t => (
-            <button key={t} aria-current={tab === t} onClick={() => setTab(t)}>
-              {{ wallet: 'Wallet', markets: 'Crypto', rates: 'World rates', connect: 'Connections' }[t]}
+          {(['wallet', 'markets', 'connect', ...(admin ? ['admin'] : [])] as Tab[]).map(t => (
+            <button key={t} aria-current={tab === t} onClick={() => setTab(t)} className={t === 'admin' ? 'nav-admin' : ''}>
+              {{ wallet: 'Wallet', markets: 'Markets', connect: 'Connections', admin: '★ Admin' }[t]}
             </button>
           ))}
         </nav>
@@ -95,14 +107,15 @@ export default function Dashboard({ onSignedOut }: { onSignedOut: () => void }) 
           <button className="link" onClick={leave}>Sign out</button>
         </div>
       </header>
+      <Ticker />
 
-      <main className="main">
+      <main className={`main${tab === 'admin' ? ' main-wide' : ''}`}>
         {notice && <div className="toast" role="status">{notice}<button className="link" onClick={() => setNotice('')}>Dismiss</button></div>}
         {error && <div className="toast toast-error" role="alert">{error}<button className="link" onClick={() => setError('')}>Dismiss</button></div>}
 
         {tab === 'wallet' && (
           <div className="grid">
-            <section className="card hero">
+            <section className="card hero glow">
               <div className="hero-head">
                 <span className="muted">Total balance</span>
                 <div className="home-pickers">
@@ -146,8 +159,8 @@ export default function Dashboard({ onSignedOut }: { onSignedOut: () => void }) 
           </div>
         )}
 
-        {tab === 'markets' && <section className="card"><h2>Crypto markets</h2><Markets home={home} /></section>}
-        {tab === 'rates' && <section className="card"><h2>Exchange rates for {currencyName(home)}</h2><Rates home={home} {...rates} /></section>}
+        {tab === 'markets' && <section className="card"><LiveMarkets home={home} key={home} /></section>}
+        {tab === 'admin' && admin && <Admin />}
         {tab === 'connect' && <section className="card"><h2>Connections</h2><Connections /></section>}
       </main>
     </div>

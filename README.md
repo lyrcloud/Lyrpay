@@ -12,7 +12,8 @@ Live: https://lyrpay.com
 - **Send**: instant transfers to anyone on Lyrpay by verified email or mobile number.
 - **Withdraw**: to the person's own bank account through Stripe Connect. They add bank and identity details on a Stripe-hosted page (an Express account, created in their country); Lyrpay then transfers from the platform balance and Stripe pays out to their bank. Withdrawals are in the platform's settlement currency, so other balances are converted first. The balance is debited before the transfer and restored if Stripe refuses it. If Stripe doesn't answer, the withdrawal stays pending until it's settled, either when the person next opens their wallet or by `lyrpay-withdrawal-sweep` every 15 minutes. Both first look for a Stripe transfer tagged with the withdrawal, so a retry never pays twice. Requires Connect to be enabled on the Stripe account, and enough available platform balance.
 - **Convert**: between currencies at the mid-market rate minus `FX_FEE_BPS` (0.5% by default), rounded down to the target's smallest unit.
-- **Crypto markets** (CoinGecko) and **world exchange rates** (open.er-api.com, updated daily).
+- **Live markets on the home page**: a scrolling ticker, the top 50 coins with 7-day sparklines (refreshed every minute) and every world currency (open.er-api.com, updated daily) with a quick converter, before anyone signs in.
+- **Super admin** (`lyrpay.com/#admin`): accounts, money held, daily volume, volume by type and the latest activity across everyone. Only verified emails in `ADMIN_EMAILS` (default `lyrclouds@gmail.com`) see it; the API checks this on every request.
 - **Web3 wallet**: connects a browser wallet and shows its address, chain and native balance.
 
 PayPal, Wise, Western Union, Ria, Robinhood, Kalshi, Gemini, Coinbase and Kraken are listed under Connections as *coming soon*: each needs a partner account and API approval before money can move through it.
