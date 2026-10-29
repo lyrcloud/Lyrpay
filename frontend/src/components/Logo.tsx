@@ -32,3 +32,12 @@ export default function Logo({ size = 32, large = false }: { size?: number; larg
     </a>
   );
 }
+
+export function SiteFooter() {
+  return (
+    <footer className="site-footer">
+      <span className="site-footer-brand"><LogoMark size={16} />© {new Date().getFullYear()} Lyrpay</span>
+      <span>Powered by Lyrcloud</span>
+    </footer>
+  );
+}

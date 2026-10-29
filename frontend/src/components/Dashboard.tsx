@@ -8,7 +8,7 @@ import Cards from './Cards';
 import Rewards from './Rewards';
 import { forgetReferral, pendingReferral } from '../lib/referral';
 import LiveMarkets, { Ticker } from './LiveMarkets';
-import Logo from './Logo';
+import Logo, { SiteFooter } from './Logo';
 import { AddMoney, Convert, CurrencySelect, SendMoney, Withdraw } from './MoneyActions';
 import { Activity, Connections } from './Panels';
 
@@ -185,6 +185,7 @@ export default function Dashboard({ onSignedOut }: { onSignedOut: () => void }) 
         {tab === 'admin' && admin && <Admin />}
         {tab === 'connect' && <section className="card"><h2>Connections</h2><Connections /></section>}
       </main>
+      <SiteFooter />
     </div>
   );
 }

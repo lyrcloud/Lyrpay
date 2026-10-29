@@ -15,7 +15,7 @@ import {
 import { COUNTRIES, currencyOf, flag, guessCountry, toE164 } from '../lib/format';
 import { pendingReferral } from '../lib/referral';
 import LiveMarkets, { Ticker } from './LiveMarkets';
-import Logo from './Logo';
+import Logo, { SiteFooter } from './Logo';
 
 type Mode = 'signin' | 'signup';
 type Step = 'form' | 'confirm' | 'reset';
@@ -264,7 +264,7 @@ export default function AuthPage({ onSignedIn }: { onSignedIn: () => void }) {
         </section>
       </div>
       <div className="home-markets"><LiveMarkets home={currencyOf(country)} /></div>
-      <footer className="site-footer"><Logo size={22} /><span>© {new Date().getFullYear()} Lyrpay · Powered by Lyrcloud</span></footer>
+      <SiteFooter />
     </div>
   );
 }
