@@ -65,4 +65,17 @@ def crypto_markets(vs_currency: str = "usd") -> list:
             for c in response.raise_for_status().json()
         ]
 
-    return _cached(f"crypto:{vs_currency.lower()}", load, CRYPTO_TTL_SECONDS)
+    try:
+        return _cached(f"crypto:{vs_currency.lower()}", load, CRYPTO_TTL_SECONDS)
+    except (httpx.HTTPError, ValueError, KeyError):
+        if vs_currency.lower() == "usd":
+            raise
+    # CoinGecko doesn't price in every currency (BTN, BSD...) and rate-limits at times,
+    # so convert the USD markets at the mid-market rate instead
+    fx = float(rate("USD", vs_currency.upper()))
+    scale = lambda v: v * fx if v is not None else None
+    return [
+        {**c, "price": scale(c["price"]), "marketCap": scale(c["marketCap"]),
+         "sparkline": [p * fx for p in c["sparkline"]]}
+        for c in crypto_markets("usd")
+    ]

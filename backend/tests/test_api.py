@@ -548,3 +548,20 @@ def test_cards_wait_for_issuing(as_user, monkeypatch):
     assert alice.post("/api/cards", json={}).status_code == 409
     assert alice.post("/api/cards/waitlist").json()["waitlisted"] is True
     assert alice.get("/api/cards").json()["waitlisted"] is True
+
+
+def test_crypto_markets_fall_back_to_converted_usd(monkeypatch):
+    import httpx
+
+    def fake_get(url, params):
+        if params["vs_currency"] != "usd":
+            return httpx.Response(400, request=httpx.Request("GET", url))
+        return httpx.Response(200, request=httpx.Request("GET", url), json=[{
+            "id": "bitcoin", "symbol": "btc", "name": "Bitcoin", "image": "", "current_price": 100,
+            "price_change_percentage_24h": 1.5, "market_cap": 1000, "sparkline_in_7d": {"price": [100] * 12},
+        }])
+
+    monkeypatch.setattr(rates._http, "get", fake_get)
+    monkeypatch.setattr(rates, "_cache", {})
+    coin = TestClient(main.app).get("/api/crypto/markets?vs=jpy").json()["coins"][0]
+    assert coin["price"] == 15000 and coin["marketCap"] == 150000 and coin["sparkline"] == [15000, 15000]
