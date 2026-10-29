@@ -3,7 +3,7 @@ import logging
 import os
 import re
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal
+from decimal import ROUND_UP, Decimal
 
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
@@ -19,6 +19,7 @@ from app.money import exponent, from_minor, parse_amount, quantize
 FX_FEE_BPS = Decimal(os.getenv("FX_FEE_BPS", "50"))
 ALLOWED_ORIGINS = [o for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:5173").split(",") if o]
 # Super admins: verified emails that can open the admin overview
+MIN_TOPUP_USD = Decimal("0.50")
 ADMIN_EMAILS = {e.strip().lower() for e in os.getenv("ADMIN_EMAILS", "lyrclouds@gmail.com").split(",") if e.strip()}
 CURRENCY = re.compile(r"^[A-Z]{3}$")
 PHONE = re.compile(r"^\+[1-9]\d{7,14}$")
@@ -282,6 +283,10 @@ class TopUp(BaseModel):
 def topup(body: TopUp, request: Request, user: User = Depends(current_user)):
     currency = currency_code(body.currency)
     amount = parse_amount(body.amount, currency)
+    # Stripe won't take a payment under $0.50, or its worth in another currency
+    if rewards.usd_value(amount, currency) < MIN_TOPUP_USD:
+        least = (MIN_TOPUP_USD * rates.rate("USD", currency)).quantize(Decimal(1).scaleb(-exponent(currency)), rounding=ROUND_UP)
+        raise ValueError(f"Add at least {money_text(least, currency)}.")
     coupon = ""
     if body.coupon.strip():
         coupon = rewards.coupon_bonus(body.coupon, user.sub, currency, amount)[0]["code"]

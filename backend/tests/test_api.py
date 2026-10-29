@@ -565,3 +565,12 @@ def test_crypto_markets_fall_back_to_converted_usd(monkeypatch):
     monkeypatch.setattr(rates, "_cache", {})
     coin = TestClient(main.app).get("/api/crypto/markets?vs=jpy").json()["coins"][0]
     assert coin["price"] == 15000 and coin["marketCap"] == 150000 and coin["sparkline"] == [15000, 15000]
+
+
+def test_topup_below_stripe_minimum_is_refused(as_user, monkeypatch):
+    monkeypatch.setattr(stripe_client, "create_checkout", lambda **_: {"url": "https://checkout.stripe.com/x"})
+    client = as_user(ALICE)
+    small = client.post("/api/topup", json={"amount": "0.25", "currency": "USD"})
+    assert small.status_code == 400 and "$0.50" in small.json()["detail"]
+    assert "75 JPY" in client.post("/api/topup", json={"amount": "74", "currency": "JPY"}).json()["detail"]
+    assert client.post("/api/topup", json={"amount": "0.50", "currency": "USD"}).json()["url"]
