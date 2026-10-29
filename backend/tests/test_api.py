@@ -312,3 +312,123 @@ def test_unverified_admin_email_is_not_admin(as_user):
     # Without a verified email the claims give no email, so the address can't be borrowed
     claims = {"sub": "x", "email": "lyrclouds@gmail.com", "email_verified": "false"}
     assert as_user(user_from_claims(claims)).get("/api/admin/overview").status_code == 403
+
+
+CAROL = User(sub="carol", email="carol@example.com", phone="", name="Carol King")
+
+
+def top_up(client, monkeypatch, sub, session_id, amount_total=5000, currency="usd", coupon=""):
+    session = {**paid_session(sub, amount_total, currency), "metadata": {"coupon": coupon} if coupon else {}}
+    monkeypatch.setattr(stripe_client, "get_checkout", lambda _: session)
+    return client.post("/api/topup/confirm", json={"sessionId": session_id}).json()
+
+
+def test_gift_card_is_redeemed_once_by_anyone(as_user, monkeypatch, outbox):
+    alice = as_user(ALICE)
+    top_up(alice, monkeypatch, "alice", "cs_gift_1")
+    bought = alice.post("/api/giftcards", json={"amount": "20", "currency": "USD", "toEmail": "carol@example.com", "toName": "Carol", "message": "Happy birthday"}).json()
+    code = bought["card"]["code"]
+    assert bought["balances"] == {"USD": "30.00"} and bought["emailed"]
+    assert any(to == "carol@example.com" and code in text for to, _, text in outbox)
+
+    bob = as_user(BOB)
+    redeemed = bob.post("/api/giftcards/redeem", json={"code": code.lower().replace("-", "")}).json()
+    assert redeemed["balances"] == {"USD": "20.00"} and redeemed["from"] == "Alice"
+    assert bob.post("/api/giftcards/redeem", json={"code": code}).status_code == 409
+    assert as_user(ALICE).post("/api/giftcards/cancel", json={"code": code}).status_code == 409
+    # The buyer sees it as used, without the full code
+    card = as_user(ALICE).get("/api/rewards").json()["giftCards"][0]
+    assert card["status"] == "redeemed" and card["code"] != code
+
+
+def test_unused_gift_card_can_be_cancelled_only_by_its_buyer(as_user, monkeypatch):
+    alice = as_user(ALICE)
+    top_up(alice, monkeypatch, "alice", "cs_gift_2")
+    code = alice.post("/api/giftcards", json={"amount": "10", "currency": "USD"}).json()["card"]["code"]
+    assert as_user(BOB).post("/api/giftcards/cancel", json={"code": code}).status_code == 409
+    assert as_user(ALICE).post("/api/giftcards/cancel", json={"code": code}).json()["balances"] == {"USD": "50.00"}
+    assert as_user(ALICE).post("/api/giftcards", json={"amount": "60", "currency": "USD"}).status_code == 409
+
+
+def test_promo_code_bonus_respects_its_limits(as_user, monkeypatch):
+    coupon = {"code": "launch10", "kind": "percent", "value": "10", "maxBonusUsd": "3", "maxUses": 2}
+    assert as_user(ALICE).post("/api/admin/coupons", json=coupon).status_code == 403
+    admin = as_user(ADMIN)
+    assert admin.post("/api/admin/coupons", json=coupon).json()["coupon"]["code"] == "LAUNCH10"
+    assert admin.post("/api/admin/coupons", json=coupon).status_code == 409
+
+    alice = as_user(ALICE)
+    assert alice.get("/api/coupons/check", params={"code": "launch10", "amount": "10", "currency": "USD"}).json()["bonus"] == "1.00"
+    first = top_up(alice, monkeypatch, "alice", "cs_coupon_1", coupon="LAUNCH10")
+    # 10% of $50 is $5, capped at $3
+    assert first["bonus"] == "3.00" and first["balances"] == {"USD": "53.00"}
+    again = top_up(alice, monkeypatch, "alice", "cs_coupon_2", coupon="LAUNCH10")
+    assert again["bonus"] == "0.00" and "already used" in again["couponNote"]
+    # Confirming the same payment twice never adds the bonus twice
+    assert top_up(alice, monkeypatch, "alice", "cs_coupon_1", coupon="LAUNCH10")["balances"] == {"USD": "103.00"}
+
+    bob = as_user(BOB)
+    assert top_up(bob, monkeypatch, "bob", "cs_coupon_3", coupon="LAUNCH10")["bonus"] == "3.00"
+    carol = as_user(CAROL)
+    assert "fully used" in top_up(carol, monkeypatch, "carol", "cs_coupon_4", coupon="LAUNCH10")["couponNote"]
+
+    as_user(ADMIN).patch("/api/admin/coupons/LAUNCH10", json={"active": False})
+    assert as_user(CAROL).get("/api/coupons/check", params={"code": "LAUNCH10", "amount": "10", "currency": "USD"}).status_code == 400
+
+
+def test_referral_pays_once_after_the_first_qualifying_top_up(as_user, monkeypatch):
+    alice = as_user(ALICE)
+    code = alice.get("/api/rewards").json()["referral"]["code"]
+    assert alice.post("/api/referral/claim", json={"code": code}).status_code == 400
+
+    carol = as_user(CAROL)
+    assert carol.post("/api/referral/claim", json={"code": code}).json()["referrer"] == "Alice"
+    assert carol.post("/api/referral/claim", json={"code": code}).status_code == 409
+    # Below the $20 minimum: no bonus yet
+    top_up(carol, monkeypatch, "carol", "cs_ref_1", amount_total=1000)
+    assert as_user(ALICE).get("/api/me").json()["balances"] == {}
+    # as_user switches who every client acts as, so sign Carol in again
+    top_up(as_user(CAROL), monkeypatch, "carol", "cs_ref_2", amount_total=2500)
+    top_up(as_user(CAROL), monkeypatch, "carol", "cs_ref_3", amount_total=2500)
+    assert as_user(ALICE).get("/api/me").json()["balances"] == {"USD": "5.00"}
+    summary = as_user(ALICE).get("/api/rewards").json()["referral"]
+    assert (summary["signups"], summary["rewarded"]) == (1, 1)
+
+
+def test_business_account_gets_lower_fee_and_bulk_payments(as_user, monkeypatch, outbox):
+    as_user(BOB).get("/api/me")
+    as_user(CAROL).get("/api/me")
+    alice = as_user(ALICE)
+    top_up(alice, monkeypatch, "alice", "cs_biz_1", amount_total=10000)
+    application = {"company": "Alice Imports Ltd", "country": "GB", "registrationId": "GB123456", "monthlyVolume": "10k-100k"}
+    assert alice.post("/api/business/apply", json={**application, "registrationId": "?"}).status_code == 400
+    assert alice.post("/api/business/apply", json=application).json()["business"]["status"] == "pending"
+    payroll = {"currency": "USD", "payments": [{"to": "+14155552671", "amount": "10"}, {"to": "carol@example.com", "amount": "15", "note": "Invoice 7"}]}
+    assert alice.post("/api/business/pay", json=payroll).status_code == 403
+
+    admin = as_user(ADMIN)
+    assert admin.get("/api/admin/businesses").json()["businesses"][0]["company"] == "Alice Imports Ltd"
+    assert admin.post("/api/admin/businesses/alice/review", json={"status": "approved"}).json()["business"]["status"] == "approved"
+    assert any(to == "alice@example.com" and "approved" in subject for to, subject, _ in outbox)
+
+    alice = as_user(ALICE)
+    assert alice.get("/api/business").json()["feeBps"] == 25
+    # A bad line stops the whole batch
+    bad = {"currency": "USD", "payments": [*payroll["payments"], {"to": "nobody@example.com", "amount": "1"}]}
+    response = alice.post("/api/business/pay", json=bad)
+    assert response.status_code == 400 and "Line 3" in response.json()["detail"]
+    paid = alice.post("/api/business/pay", json=payroll).json()
+    assert (paid["paid"], paid["total"], paid["balances"]) == (2, "25.00", {"USD": "75.00"})
+    received = as_user(CAROL).get("/api/me").json()["transactions"][0]
+    assert received["counterparty"] == "Alice Imports Ltd" and received["note"] == "Invoice 7"
+    too_much = {"currency": "USD", "payments": [{"to": "carol@example.com", "amount": "100"}]}
+    assert as_user(ALICE).post("/api/business/pay", json=too_much).status_code == 409
+    assert as_user(CAROL).get("/api/me").json()["balances"] == {"USD": "15.00"}
+
+
+def test_admin_can_change_referral_and_business_settings(as_user):
+    assert as_user(ALICE).put("/api/admin/settings", json={"referrerBonusUsd": "50"}).status_code == 403
+    admin = as_user(ADMIN)
+    assert admin.put("/api/admin/settings", json={"businessFeeBps": "500"}).status_code == 400
+    saved = admin.put("/api/admin/settings", json={"referrerBonusUsd": "7.5", "businessFeeBps": "10"}).json()["settings"]
+    assert saved["referrerBonusUsd"] == "7.50" and saved["businessFeeBps"] == 10

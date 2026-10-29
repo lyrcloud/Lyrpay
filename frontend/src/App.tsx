@@ -2,6 +2,9 @@ import { useEffect, useState } from 'react';
 import AuthPage from './components/AuthPage';
 import Dashboard from './components/Dashboard';
 import { completeHostedSignIn, currentUser } from './lib/auth';
+import { captureReferral } from './lib/referral';
+
+captureReferral();
 
 export default function App() {
   const [signedIn, setSignedIn] = useState(() => !!currentUser());

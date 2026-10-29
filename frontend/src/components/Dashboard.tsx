@@ -3,13 +3,19 @@ import { api, ApiError, type Profile, type Statement } from '../lib/api';
 import { currentUser, signOut } from '../lib/auth';
 import { COUNTRIES, currencyName, currencyOf, flag, formatMoney, guessCountry } from '../lib/format';
 import Admin from './Admin';
+import Business from './Business';
+import Rewards from './Rewards';
+import { forgetReferral, pendingReferral } from '../lib/referral';
 import LiveMarkets, { Ticker } from './LiveMarkets';
 import Logo from './Logo';
 import { AddMoney, Convert, CurrencySelect, SendMoney, Withdraw } from './MoneyActions';
 import { Activity, Connections } from './Panels';
 
-type Tab = 'wallet' | 'markets' | 'connect' | 'admin';
-const TABS: Tab[] = ['wallet', 'markets', 'connect', 'admin'];
+type Tab = 'wallet' | 'rewards' | 'business' | 'markets' | 'connect' | 'admin';
+const TABS: Tab[] = ['wallet', 'rewards', 'business', 'markets', 'connect', 'admin'];
+const TAB_LABEL: Record<Tab, string> = {
+  wallet: 'Wallet', rewards: 'Rewards', business: 'Business', markets: 'Markets', connect: 'Connections', admin: '★ Admin',
+};
 type Action = 'add' | 'send' | 'convert' | 'withdraw';
 
 export default function Dashboard({ onSignedOut }: { onSignedOut: () => void }) {
@@ -19,8 +25,10 @@ export default function Dashboard({ onSignedOut }: { onSignedOut: () => void }) 
   const [rates, setRates] = useState<{ rates: Record<string, number>; updated: string }>({ rates: {}, updated: '' });
   const [cardPayments, setCardPayments] = useState(false);
   const [admin, setAdmin] = useState(false);
+  // A gift card link (?gift=CODE) opens Rewards with the code filled in
+  const [giftCode] = useState(() => new URLSearchParams(location.search).get('gift') ?? '');
   // The tab is kept in the address (lyrpay.com/#admin), so it can be bookmarked and survives a reload
-  const [tab, setTabState] = useState<Tab>(() => TABS.find(t => `#${t}` === location.hash) ?? 'wallet');
+  const [tab, setTabState] = useState<Tab>(() => (giftCode ? 'rewards' : TABS.find(t => `#${t}` === location.hash) ?? 'wallet'));
   const setTab = (next: Tab) => {
     setTabState(next);
     history.replaceState(null, '', next === 'wallet' ? location.pathname : `#${next}`);
@@ -43,6 +51,14 @@ export default function Dashboard({ onSignedOut }: { onSignedOut: () => void }) 
       setStatement(rest);
       setAdmin(admin);
       if (!admin) setTabState(t => (t === 'admin' ? 'wallet' : t));
+      // Signed up through a friend's link: record the referral once
+      const referral = pendingReferral();
+      if (referral) {
+        api.claimReferral(referral)
+          .then(r => setNotice(`Welcome! You joined through ${r.referrer || 'a friend'}'s invite.`))
+          .catch(() => {})
+          .finally(forgetReferral);
+      }
       // First visit: home country and currency from the browser
       if (!profile.country) {
         const country = guessCountry();
@@ -64,11 +80,13 @@ export default function Dashboard({ onSignedOut }: { onSignedOut: () => void }) 
     if (topup) {
       history.replaceState(null, '', '/');
       if (topup === 'cancelled') setNotice('Payment cancelled. Nothing was charged.');
-      else api.confirmTopup(topup).then(result => {
+      else api.confirmTopup(topup).then(({ amount, currency, bonus, couponNote, ...result }) => {
         setStatement(result);
-        setNotice(`${formatMoney(result.amount, result.currency)} added to your balance.`);
+        const extra = Number(bonus) > 0 ? ` plus a ${formatMoney(bonus, currency)} promo bonus 🎉` : couponNote ? ` (${couponNote})` : '';
+        setNotice(`${formatMoney(amount, currency)} added to your balance${extra}.`);
       }).catch(err => setError(err.message));
     }
+    if (giftCode) history.replaceState(null, '', '/#rewards');
   }, []);
 
   useEffect(() => {
@@ -95,9 +113,9 @@ export default function Dashboard({ onSignedOut }: { onSignedOut: () => void }) 
       <header className="topbar">
         <Logo />
         <nav className="nav" aria-label="Sections">
-          {(['wallet', 'markets', 'connect', ...(admin ? ['admin'] : [])] as Tab[]).map(t => (
+          {TABS.filter(t => t !== 'admin' || admin).map(t => (
             <button key={t} aria-current={tab === t} onClick={() => setTab(t)} className={t === 'admin' ? 'nav-admin' : ''}>
-              {{ wallet: 'Wallet', markets: 'Markets', connect: 'Connections', admin: '★ Admin' }[t]}
+              {TAB_LABEL[t]}
             </button>
           ))}
         </nav>
@@ -159,6 +177,8 @@ export default function Dashboard({ onSignedOut }: { onSignedOut: () => void }) 
           </div>
         )}
 
+        {tab === 'rewards' && <Rewards {...shared} giftCode={giftCode} />}
+        {tab === 'business' && <Business {...shared} country={profile?.country ?? ''} />}
         {tab === 'markets' && <section className="card"><LiveMarkets home={home} key={home} /></section>}
         {tab === 'admin' && admin && <Admin />}
         {tab === 'connect' && <section className="card"><h2>Connections</h2><Connections /></section>}

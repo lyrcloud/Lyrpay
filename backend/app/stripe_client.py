@@ -61,7 +61,7 @@ def stripe_amount(amount: Decimal, currency: str) -> int:
     return minor - minor % 10 if currency.upper() in THREE_DECIMAL else minor
 
 
-def create_checkout(*, user_sub: str, email: str, amount: Decimal, currency: str, origin: str) -> dict:
+def create_checkout(*, user_sub: str, email: str, amount: Decimal, currency: str, origin: str, coupon: str = "") -> dict:
     # No payment_method_types: Checkout offers every method switched on in the
     # Stripe dashboard that fits the currency and the payer's country
     # (cards, wallets, bank debits and local methods).
@@ -79,6 +79,9 @@ def create_checkout(*, user_sub: str, email: str, amount: Decimal, currency: str
     }
     if email:
         data["customer_email"] = email
+    if coupon:
+        # Read back when the payment is confirmed, to add the promo code's bonus
+        data["metadata[coupon]"] = coupon
     return _request("POST", "/checkout/sessions", data)
 
 

@@ -13,6 +13,7 @@ import {
   signUp,
 } from '../lib/auth';
 import { COUNTRIES, currencyOf, flag, guessCountry, toE164 } from '../lib/format';
+import { pendingReferral } from '../lib/referral';
 import LiveMarkets, { Ticker } from './LiveMarkets';
 import Logo from './Logo';
 
@@ -34,7 +35,9 @@ function message(error: unknown) {
 }
 
 export default function AuthPage({ onSignedIn }: { onSignedIn: () => void }) {
-  const [mode, setMode] = useState<Mode>('signin');
+  const [invited] = useState(() => !!pendingReferral());
+  const gift = new URLSearchParams(location.search).get('gift');
+  const [mode, setMode] = useState<Mode>(invited ? 'signup' : 'signin');
   const [step, setStep] = useState<Step>('form');
   const [via, setVia] = useState<'email' | 'phone'>('email');
   const [country, setCountry] = useState(guessCountry);
@@ -141,6 +144,7 @@ export default function AuthPage({ onSignedIn }: { onSignedIn: () => void }) {
             <li>Pay anyone on Lyrpay by email or mobile number</li>
             <li>Live mid-market exchange rates</li>
             <li>One Lyr account for Lyrpay and Lyrtrip</li>
+          <li>Gift cards, referral rewards and business accounts</li>
           </ul>
           <div className="auth-stats">
             <div><strong>160+</strong><span>currencies</span></div>
@@ -151,6 +155,9 @@ export default function AuthPage({ onSignedIn }: { onSignedIn: () => void }) {
         </section>
 
         <section className="card auth-card">
+        {(invited || gift) && (
+          <p className="info invite">{gift ? '🎁 Someone sent you a Lyrpay gift card. Sign in or create a free wallet to redeem it.' : '🎉 A friend invited you to Lyrpay. Create your free wallet to accept.'}</p>
+        )}
           {step === 'form' ? (
             <>
               <div className="tabs" role="tablist">

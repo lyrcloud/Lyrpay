@@ -4,6 +4,7 @@ import { formatDate, formatMoney } from '../lib/format';
 
 const KIND_LABEL: Record<Transaction['kind'], string> = {
   topup: 'Added money', send: 'Sent', receive: 'Received', convert: 'Converted', withdraw: 'Withdrew to bank',
+  giftcard: 'Gift card', redeem: 'Redeemed gift card', refund: 'Refund', bonus: 'Bonus',
 };
 
 const STATUS_LABEL = { pending: 'Processing', failed: 'Failed, returned to balance', paid: '' };
@@ -17,7 +18,7 @@ export function Activity({ transactions }: { transactions: Transaction[] }) {
         return (
           <li key={tx.id}>
             <div>
-              <strong>{KIND_LABEL[tx.kind]}{tx.counterparty && !['topup', 'withdraw'].includes(tx.kind) ? ` · ${tx.counterparty}` : ''}</strong>
+              <strong>{KIND_LABEL[tx.kind]}{tx.counterparty && !['topup', 'withdraw'].includes(tx.kind) ? ` · ${tx.counterparty}` : ''}{tx.batch ? ' · bulk' : ''}</strong>
               <span>
                 {formatDate(tx.at)}{tx.note ? ` · ${tx.note}` : ''}
                 {tx.status && STATUS_LABEL[tx.status] ? ` · ${STATUS_LABEL[tx.status]}` : ''}

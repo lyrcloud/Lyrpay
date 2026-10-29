@@ -17,6 +17,12 @@ from app.auth import User
 #   TOPUP#<session>       TOPUP   marks a Stripe payment as credited, once
 #   OPTOUT#<email>        OPTOUT  unsubscribed from Lyrpay emails
 #   UPDATE#<campaign>     <email> an announcement email sent (or being sent) to that address, once
+#   GIFT#<code>           GIFT    a gift card: amount, currency, status (active, redeemed, cancelled), who bought it
+#   USER#<sub>   GIFTSENT#<iso>#<code>  points to a gift card the person bought
+#   COUPON#<code>         COUPON  a promo code made by the admin; COUPON#<code> USED#<sub> marks a person's one use
+#   REF#<code>            REF     sub, so a referral link finds who shared it
+#   SETTINGS              REWARDS referral bonuses and the business conversion fee, set by the admin
+# A profile can also carry referralCode, referredBy (sub), referralRewarded, and business (an application and its review).
 # Pending withdrawals also carry queue="withdraw", which puts them (and only them) in the sparse
 # "pending" index, so the scheduled sweep finds them without scanning the table.
 TABLE_NAME = os.getenv("LEDGER_TABLE", "lyrpay-ledger")
@@ -170,13 +176,28 @@ def find_recipient(handle: str) -> dict | None:
     return {"sub": item["sub"], "name": profile.get("name", "")}
 
 
-def credit_topup(sub: str, session_id: str, currency: str, amount: Decimal):
-    """Credit a paid Stripe Checkout session, at most once."""
-    _transact([
-        _put({"pk": f"TOPUP#{session_id}", "sk": "TOPUP", "sub": sub, "at": _now()}, "attribute_not_exists(pk)"),
-        _credit(sub, currency, amount),
-        _put(_tx_item(sub, "topup", currency, amount, reference=session_id, counterparty="Stripe")),
-    ], AlreadyApplied())
+def credit_topup(sub: str, session_id: str, currency: str, amount: Decimal,
+                 bonus: Decimal = Decimal(0), extras: list | None = None) -> bool:
+    """Credit a paid Stripe Checkout session, at most once. A promo code's bonus is added to the same balance update,
+    with extras (spending the code) in the same transaction; if they can't go in (the code ran out meanwhile), the
+    top-up is credited without the bonus. True when the bonus went in."""
+    def writes(credit: Decimal) -> list:
+        return [
+            _put({"pk": f"TOPUP#{session_id}", "sk": "TOPUP", "sub": sub, "at": _now()}, "attribute_not_exists(pk)"),
+            _credit(sub, currency, credit),
+            _put(_tx_item(sub, "topup", currency, amount, reference=session_id, counterparty="Stripe")),
+        ]
+
+    base = writes(amount)
+    if extras:
+        try:
+            table().meta.client.transact_write_items(TransactItems=writes(amount + bonus) + extras)
+            return True
+        except ClientError as error:
+            if error.response["Error"]["Code"] != "TransactionCanceledException":
+                raise
+    _transact(base, AlreadyApplied())
+    return False
 
 
 def convert(sub: str, source: str, amount: Decimal, target: str, received: Decimal, rate: Decimal):
@@ -194,6 +215,20 @@ def transfer(sender: User, sender_name: str, recipient: dict, currency: str, amo
         _put(_tx_item(sender.sub, "send", currency, -amount, counterparty=recipient["name"], note=note)),
         _put(_tx_item(recipient["sub"], "receive", currency, amount, counterparty=sender_name, note=note)),
     ], InsufficientFunds())
+
+
+def bulk_transfer(sender_sub: str, sender_name: str, currency: str, payments: list[tuple[dict, Decimal, str]]):
+    """Pay several people at once, all or nothing: one debit, then a credit per recipient and a line on each statement."""
+    total = sum((amount for _, amount, _ in payments), Decimal(0))
+    credits: dict[str, Decimal] = {}
+    items = [_debit(sender_sub, currency, total)]
+    for recipient, amount, note in payments:
+        # One update per balance, since a transaction can't touch the same item twice
+        credits[recipient["sub"]] = credits.get(recipient["sub"], Decimal(0)) + amount
+        items.append(_put(_tx_item(sender_sub, "send", currency, -amount, counterparty=recipient["name"], note=note, batch=True)))
+        items.append(_put(_tx_item(recipient["sub"], "receive", currency, amount, counterparty=sender_name, note=note)))
+    items += [_credit(sub, currency, amount) for sub, amount in credits.items()]
+    _transact(items, InsufficientFunds())
 
 
 def start_withdrawal(sub: str, currency: str, amount: Decimal) -> dict:
@@ -294,7 +329,9 @@ def release_update(campaign: str, email: str):
 
 def everything() -> dict[str, list[dict]]:
     """The whole ledger in one scan, grouped for the admin overview: profiles, balances, transactions, opt-outs."""
-    groups: dict[str, list[dict]] = {"profiles": [], "balances": [], "transactions": [], "optouts": []}
+    groups: dict[str, list[dict]] = {
+        "profiles": [], "balances": [], "transactions": [], "optouts": [], "gifts": [], "coupons": [],
+    }
     for item in _scan():
         sk = item["sk"]
         if sk == "PROFILE":
@@ -305,4 +342,8 @@ def everything() -> dict[str, list[dict]]:
             groups["transactions"].append(item)
         elif sk == "OPTOUT":
             groups["optouts"].append(item)
+        elif sk == "GIFT":
+            groups["gifts"].append(item)
+        elif sk == "COUPON":
+            groups["coupons"].append(item)
     return groups

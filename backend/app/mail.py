@@ -181,6 +181,54 @@ def welcome(profile: dict) -> bool:
         return False
 
 
+def gift_card(card: dict, amount_text: str) -> bool:
+    """Deliver a gift card to the email its buyer gave; False if it couldn't go (they can share the code themselves)."""
+    to = mailable(card.get("toEmail"))
+    if not to or ledger.opted_out(to):
+        return False
+    sender = card.get("fromName") or "Someone"
+    greeting = f"Hi {first_name(card.get('toName'))}," if card.get("toName") else "Hi,"
+    paragraphs = [f"{greeting} {sender} sent you a {amount_text} Lyrpay gift card."]
+    if card.get("message"):
+        paragraphs.append(f"Their message:\n{card['message']}")
+    paragraphs += [f"Your gift card code: {card['code']}",
+                   "Open the link below, sign in or create a free Lyrpay wallet, and the money goes straight onto your balance."]
+    text, html = render(
+        f"You've got a {amount_text} gift card", paragraphs, button=("Redeem your gift card", f"{SITE_URL}/?gift={card['code']}#rewards"),
+        footer=_footer(f"You're getting this because {sender} sent you a Lyrpay gift card.", to))
+    try:
+        send(to, f"{sender} sent you a {amount_text} Lyrpay gift card", text, html, unsubscribe_url(to))
+        return True
+    except Exception:
+        logger.exception("Gift card email to %s failed", to)
+        return False
+
+
+def business_decision(profile: dict, business: dict) -> bool:
+    to = mailable(profile.get("email"))
+    if not to:
+        return False
+    approved = business["status"] == "approved"
+    paragraphs = (
+        [f"{business['company']} is now a Lyrpay business account. You can convert at the business rate and pay up to "
+         "30 people in one go from the Business tab."]
+        if approved else
+        [f"We couldn't approve a business account for {business['company']} yet."]
+        + ([f"Note from our team: {business['note']}"] if business.get("note") else [])
+        + ["Reply to this email if you have questions, or apply again with updated details."]
+    )
+    text, html = render(
+        "Your business account is approved" if approved else "About your business account", paragraphs,
+        button=("Open Business", f"{SITE_URL}/#business"),
+        footer=_footer("You're getting this because you applied for a Lyrpay business account.", to))
+    try:
+        send(to, "Your Lyrpay business account is approved" if approved else "Your Lyrpay business application", text, html)
+        return True
+    except Exception:
+        logger.exception("Business decision email to %s failed", to)
+        return False
+
+
 # ── Updates to everyone ───────────────────────────────────────────────────────
 
 def recipients() -> dict[str, str]:

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, type AdminOverview, type Transaction } from '../lib/api';
 import { countryName, flag, formatDate, formatMoney } from '../lib/format';
+import { Businesses, Coupons, Settings } from './AdminRewards';
 
 const REFRESH_MS = 60_000;
 
@@ -10,7 +11,14 @@ const KIND: Record<Transaction['kind'], { label: string; color: string }> = {
   receive: { label: 'Received', color: 'var(--c3)' },
   convert: { label: 'Converted', color: 'var(--c4)' },
   withdraw: { label: 'Withdrawn', color: 'var(--c5)' },
+  giftcard: { label: 'Gift cards', color: 'var(--c6)' },
+  redeem: { label: 'Redeemed', color: 'var(--c3)' },
+  refund: { label: 'Refunded', color: 'var(--muted)' },
+  bonus: { label: 'Bonuses', color: 'var(--c4)' },
 };
+
+// The second half of money already counted (a transfer's receive, a gift card's redeem or refund)
+const SECOND_HALF: Transaction['kind'][] = ['receive', 'redeem', 'refund'];
 
 const usd = (n: number, compact = false) =>
   new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', notation: compact ? 'compact' : 'standard', maximumFractionDigits: compact ? 1 : 2 }).format(n);
@@ -95,7 +103,7 @@ function VolumeChart({ daily }: { daily: AdminOverview['daily'] }) {
 }
 
 function KindBreakdown({ byKind }: { byKind: AdminOverview['byKind'] }) {
-  const rows = (Object.keys(KIND) as Transaction['kind'][]).filter(k => k !== 'receive').map(k => ({ kind: k, ...(byKind[k] ?? { count: 0, volumeUsd: 0 }) }));
+  const rows = (Object.keys(KIND) as Transaction['kind'][]).filter(k => !SECOND_HALF.includes(k)).map(k => ({ kind: k, ...(byKind[k] ?? { count: 0, volumeUsd: 0 }) }));
   const max = Math.max(1, ...rows.map(r => r.volumeUsd));
   return (
     <ul className="hbars">
@@ -111,7 +119,30 @@ function KindBreakdown({ byKind }: { byKind: AdminOverview['byKind'] }) {
 
 type SortKey = 'created' | 'name' | 'heldUsd' | 'country';
 
+type Section = 'overview' | 'coupons' | 'businesses' | 'settings';
+
 export default function Admin() {
+  const [section, setSection] = useState<Section>('overview');
+  const [waiting, setWaiting] = useState(0);
+  return (
+    <div className="admin">
+      <nav className="admin-nav" aria-label="Admin sections">
+        {(['overview', 'coupons', 'businesses', 'settings'] as Section[]).map(s => (
+          <button key={s} aria-current={section === s} onClick={() => setSection(s)}>
+            {{ overview: 'Overview', coupons: 'Promo codes', businesses: 'Businesses', settings: 'Rewards settings' }[s]}
+            {s === 'businesses' && waiting > 0 && <span className="count">{waiting}</span>}
+          </button>
+        ))}
+      </nav>
+      {section === 'overview' && <Overview onWaiting={setWaiting} onOpen={setSection} />}
+      {section === 'coupons' && <Coupons />}
+      {section === 'businesses' && <Businesses />}
+      {section === 'settings' && <Settings />}
+    </div>
+  );
+}
+
+function Overview({ onWaiting, onOpen }: { onWaiting: (n: number) => void; onOpen: (s: Section) => void }) {
   const [data, setData] = useState<AdminOverview | null>(null);
   const [days, setDays] = useState(14);
   const [error, setError] = useState('');
@@ -122,7 +153,7 @@ export default function Admin() {
   const load = () => {
     setLoading(true);
     api.adminOverview(days)
-      .then(d => { setData(d); setError(''); })
+      .then(d => { setData(d); setError(''); onWaiting(d.totals.businessApplications); })
       .catch(err => setError(err.message))
       .finally(() => setLoading(false));
   };
@@ -151,13 +182,13 @@ export default function Admin() {
   );
 
   if (error && !data) return <div className="card"><p className="error">{error}</p></div>;
-  if (!data) return <div className="admin"><div className="kpis">{Array.from({ length: 6 }, (_, i) => <div className="kpi skeleton" key={i} />)}</div></div>;
+  if (!data) return <div className="admin-section"><div className="kpis">{Array.from({ length: 6 }, (_, i) => <div className="kpi skeleton" key={i} />)}</div></div>;
 
   const t = data.totals;
   const maxHeld = Math.max(1, ...data.held.map(h => h.usd));
 
   return (
-    <div className="admin">
+    <div className="admin-section">
       <div className="admin-head">
         <div>
           <span className="badge admin-badge">★ Super admin</span>
@@ -180,6 +211,18 @@ export default function Admin() {
         <Kpi label="Transactions" value={t.transactions} format={n => Math.round(n).toLocaleString()} tone="k4" />
         <Kpi label="Pending withdrawals" value={t.pendingWithdrawals} format={n => Math.round(n).toString()} note={t.pendingWithdrawals ? 'settled every 15 min' : 'all clear'} tone={t.pendingWithdrawals ? 'warn' : 'k5'} />
         <Kpi label="Unsubscribed" value={t.unsubscribed} format={n => Math.round(n).toString()} note="from emails" tone="k6" />
+        <Kpi label="Gift cards unredeemed" value={t.giftCardsOutstandingUsd} format={n => usd(n)} note={`${t.giftCardsSold} sold`} tone="k3" />
+        <Kpi label="Referred sign-ups" value={t.referrals} format={n => Math.round(n).toString()} note="through invite links" tone="k1" />
+        <button className="kpi kpi-button k2" onClick={() => onOpen('businesses')}>
+          <span>Business accounts</span>
+          <strong>{t.businesses}</strong>
+          <em className={t.businessApplications ? 'warn-text' : ''}>{t.businessApplications ? `${t.businessApplications} waiting for review →` : 'none waiting'}</em>
+        </button>
+        <button className="kpi kpi-button k4" onClick={() => onOpen('coupons')}>
+          <span>Active promo codes</span>
+          <strong>{t.activeCoupons}</strong>
+          <em>manage →</em>
+        </button>
       </div>
 
       <div className="admin-grid">
@@ -229,7 +272,10 @@ export default function Admin() {
                     <td>
                       <div className="person">
                         <span className="avatar">{(u.name || u.email || u.phone || '?')[0].toUpperCase()}</span>
-                        <div><strong>{u.name || '—'}</strong><span>{u.email || u.phone}</span></div>
+                        <div>
+                          <strong>{u.name || '—'}{u.business === 'approved' && <span className="tag">Business</span>}{u.referred && <span className="tag soft">Referred</span>}</strong>
+                          <span>{u.email || u.phone}</span>
+                        </div>
                       </div>
                     </td>
                     <td className="hide-sm">{u.country ? `${flag(u.country)} ${countryName(u.country)}` : '—'}</td>

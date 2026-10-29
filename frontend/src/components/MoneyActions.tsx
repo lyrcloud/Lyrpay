@@ -41,11 +41,26 @@ function useAction() {
 export function AddMoney({ currencies, home, cardPayments }: Props & { cardPayments: boolean }) {
   const [amount, setAmount] = useState('');
   const [currency, setCurrency] = useState(home);
+  const [promo, setPromo] = useState('');
+  const [promoOpen, setPromoOpen] = useState(false);
+  const [bonus, setBonus] = useState<{ text: string; ok: boolean } | null>(null);
   const { busy, error, run } = useAction();
   useEffect(() => setCurrency(home), [home]);
 
+  // Shows the bonus a promo code adds, a moment after typing stops
+  useEffect(() => {
+    setBonus(null);
+    if (!promo.trim() || !Number(amount)) return;
+    const timer = setTimeout(() => {
+      api.checkCoupon(promo, amount, currency)
+        .then(r => setBonus({ ok: true, text: `+${formatMoney(r.bonus, r.currency)} bonus${r.description ? ` · ${r.description}` : ''}` }))
+        .catch(err => setBonus({ ok: false, text: err.message }));
+    }, 450);
+    return () => clearTimeout(timer);
+  }, [promo, amount, currency]);
+
   const submit = run(async () => {
-    const { url } = await api.topup(amount, currency);
+    const { url } = await api.topup(amount, currency, bonus?.ok ? promo : '');
     location.href = url;
   });
 
@@ -58,6 +73,14 @@ export function AddMoney({ currencies, home, cardPayments }: Props & { cardPayme
         <input inputMode="decimal" placeholder="0.00" required value={amount} onChange={e => setAmount(e.target.value)} aria-label="Amount" />
         <CurrencySelect value={currency} onChange={setCurrency} options={currencies} />
       </div>
+      {promoOpen ? (
+        <label>Promo code
+          <input value={promo} onChange={e => setPromo(e.target.value.toUpperCase())} placeholder="e.g. WELCOME10" autoComplete="off" spellCheck={false} />
+          {bonus && <span className={bonus.ok ? 'promo-ok' : 'promo-bad'}>{bonus.text}</span>}
+        </label>
+      ) : (
+        <button type="button" className="link align-start" onClick={() => setPromoOpen(true)}>Have a promo code?</button>
+      )}
       {error && <p className="error" role="alert">{error}</p>}
       <button className="button primary" disabled={busy || !cardPayments}>
         {busy ? 'Opening checkout…' : 'Continue to payment'}
