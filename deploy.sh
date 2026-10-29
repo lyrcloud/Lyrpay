@@ -2,6 +2,7 @@
 # Builds and deploys everything: API + ledger + sign-in client (template.yaml), then the web dashboard.
 # Usage: ./deploy.sh
 # Custom domain (once): CERTIFICATE_ARN=<issued lyrpay.com cert> ./deploy.sh, then point lyrpay.com at CloudFront
+# Cards (once Stripe Issuing is on): STRIPE_PUBLISHABLE_KEY=pk_live_... CARD_TERMS_URL=https://... ./deploy.sh
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -15,16 +16,26 @@ output() {
     --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text 2>/dev/null || true
 }
 
-# Keeps the custom domain's certificate across plain redeploys
-CERTIFICATE_ARN=${CERTIFICATE_ARN:-$(aws cloudformation describe-stacks --stack-name "$STACK" --region "$REGION" \
-  --query "Stacks[0].Parameters[?ParameterKey=='CertificateArn'].ParameterValue" --output text 2>/dev/null || true)}
-[ "$CERTIFICATE_ARN" = "None" ] && CERTIFICATE_ARN=""
-CERT_OVERRIDE=()
-[ -n "$CERTIFICATE_ARN" ] && CERT_OVERRIDE=("CertificateArn=$CERTIFICATE_ARN")
+previous() {
+  local value
+  value=$(aws cloudformation describe-stacks --stack-name "$STACK" --region "$REGION" \
+    --query "Stacks[0].Parameters[?ParameterKey=='$1'].ParameterValue" --output text 2>/dev/null || true)
+  [ "$value" = "None" ] && value=""
+  echo "$value"
+}
+
+# Settings given once are kept across plain redeploys: the custom domain's certificate and the card settings
+CERTIFICATE_ARN=${CERTIFICATE_ARN:-$(previous CertificateArn)}
+STRIPE_PUBLISHABLE_KEY=${STRIPE_PUBLISHABLE_KEY:-$(previous StripePublishableKey)}
+CARD_TERMS_URL=${CARD_TERMS_URL:-$(previous CardTermsUrl)}
+KEPT=()
+[ -n "$CERTIFICATE_ARN" ] && KEPT+=("CertificateArn=$CERTIFICATE_ARN")
+[ -n "$STRIPE_PUBLISHABLE_KEY" ] && KEPT+=("StripePublishableKey=$STRIPE_PUBLISHABLE_KEY")
+[ -n "$CARD_TERMS_URL" ] && KEPT+=("CardTermsUrl=$CARD_TERMS_URL")
 
 deploy_stack() {
   sam deploy --stack-name "$STACK" --region "$REGION" --resolve-s3 --capabilities CAPABILITY_IAM \
-    --no-confirm-changeset --no-fail-on-empty-changeset --parameter-overrides "PrimaryOrigin=$1" "${CERT_OVERRIDE[@]}"
+    --no-confirm-changeset --no-fail-on-empty-changeset --parameter-overrides "PrimaryOrigin=$1" "${KEPT[@]}"
 }
 
 echo "Building API..."

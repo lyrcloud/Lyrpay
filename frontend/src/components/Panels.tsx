@@ -4,10 +4,11 @@ import { formatDate, formatMoney } from '../lib/format';
 
 const KIND_LABEL: Record<Transaction['kind'], string> = {
   topup: 'Added money', send: 'Sent', receive: 'Received', convert: 'Converted', withdraw: 'Withdrew to bank',
-  giftcard: 'Gift card', redeem: 'Redeemed gift card', refund: 'Refund', bonus: 'Bonus',
+  giftcard: 'Gift card', redeem: 'Redeemed gift card', refund: 'Refund', bonus: 'Bonus', card: 'Card',
 };
 
 const STATUS_LABEL = { pending: 'Processing', failed: 'Failed, returned to balance', paid: '' };
+const CARD_STATUS_LABEL = { pending: 'Pending', failed: 'Cancelled, returned to balance', paid: '' };
 
 export function Activity({ transactions }: { transactions: Transaction[] }) {
   if (!transactions.length) return <p className="empty">No activity yet. Add money to get started.</p>;
@@ -21,7 +22,7 @@ export function Activity({ transactions }: { transactions: Transaction[] }) {
               <strong>{KIND_LABEL[tx.kind]}{tx.counterparty && !['topup', 'withdraw'].includes(tx.kind) ? ` · ${tx.counterparty}` : ''}{tx.batch ? ' · bulk' : ''}</strong>
               <span>
                 {formatDate(tx.at)}{tx.note ? ` · ${tx.note}` : ''}
-                {tx.status && STATUS_LABEL[tx.status] ? ` · ${STATUS_LABEL[tx.status]}` : ''}
+                {tx.status && (tx.kind === 'card' ? CARD_STATUS_LABEL : STATUS_LABEL)[tx.status] ? ` · ${(tx.kind === 'card' ? CARD_STATUS_LABEL : STATUS_LABEL)[tx.status]}` : ''}
               </span>
             </div>
             <div className="tx-amount">

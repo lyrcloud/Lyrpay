@@ -432,3 +432,119 @@ def test_admin_can_change_referral_and_business_settings(as_user):
     assert admin.put("/api/admin/settings", json={"businessFeeBps": "500"}).status_code == 400
     saved = admin.put("/api/admin/settings", json={"referrerBonusUsd": "7.5", "businessFeeBps": "10"}).json()["settings"]
     assert saved["referrerBonusUsd"] == "7.50" and saved["businessFeeBps"] == 10
+
+
+# ── Cards ────────────────────────────────────────────────────────────────────
+
+import hashlib  # noqa: E402
+import hmac  # noqa: E402
+import json  # noqa: E402
+import time  # noqa: E402
+
+from app import cards  # noqa: E402
+
+WHSEC = "whsec_test"
+
+
+@pytest.fixture
+def issuing(monkeypatch, as_user):
+    """Issuing switched on, with Alice holding card ic_1 and $50 on her balance."""
+    monkeypatch.setattr(cards, "_status", (time.time(), True))
+    monkeypatch.setattr(cards, "_webhook_secret", WHSEC)
+    monkeypatch.setattr(stripe_client, "platform", lambda: {"country": "US", "currency": "USD"})
+    monkeypatch.setattr(stripe_client, "create_cardholder", lambda **kw: {"id": "ich_1"})
+    monkeypatch.setattr(stripe_client, "create_card", lambda **kw: {"id": "ic_1", "last4": "4242", "brand": "Visa", "exp_month": 10, "exp_year": 2029, "currency": "usd", "status": "active"})
+    alice = as_user(ALICE)
+    alice.get("/api/me")
+    alice.patch("/api/me", json={"country": "US"})
+    top_up(alice, monkeypatch, "alice", "cs_card", amount_total=5000)
+    application = {"firstName": "Alice", "lastName": "Smith", "dob": "1990-04-01", "line1": "1 Main St", "city": "Austin",
+                   "state": "TX", "postalCode": "78701", "acceptTerms": True}
+    assert alice.post("/api/cards", json=application).json()["card"]["last4"] == "4242"
+    return alice
+
+
+def send_event(client, kind, obj, secret=WHSEC):
+    payload = json.dumps({"type": kind, "api_version": "2024-06-20", "data": {"object": obj}}).encode()
+    stamp = int(time.time())
+    signature = hmac.new(secret.encode(), f"{stamp}.".encode() + payload, hashlib.sha256).hexdigest()
+    return client.post("/api/stripe/issuing", content=payload, headers={"stripe-signature": f"t={stamp},v1={signature}"})
+
+
+CARD = {"id": "ic_1", "last4": "4242", "metadata": {"user": "alice"}}
+
+
+def auth(auth_id, cents, status="pending"):
+    return {"id": auth_id, "card": CARD, "currency": "usd", "amount": cents, "status": status, "approved": True,
+            "pending_request": {"amount": cents, "currency": "usd"}, "merchant_data": {"name": "Coffee Co"}}
+
+
+def balance(client):
+    return client.get("/api/me").json()["balances"].get("USD")
+
+
+def test_card_payment_is_held_captured_and_tipped(issuing):
+    assert send_event(issuing, "issuing_authorization.request", auth("iauth_1", 2000)).json() == {"approved": True}
+    assert balance(issuing) == "30.00"
+    # Asked again (Stripe retries): same answer, held once
+    assert send_event(issuing, "issuing_authorization.request", auth("iauth_1", 2000)).json() == {"approved": True}
+    assert balance(issuing) == "30.00"
+    # Captured with a tip, then closed
+    txn = {"id": "ipi_1", "type": "capture", "amount": -2300, "currency": "usd", "authorization": "iauth_1", "card": "ic_1"}
+    send_event(issuing, "issuing_transaction.created", txn)
+    send_event(issuing, "issuing_transaction.created", txn)
+    send_event(issuing, "issuing_authorization.updated", auth("iauth_1", 0, status="closed"))
+    assert balance(issuing) == "27.00"
+    line = issuing.get("/api/me").json()["transactions"][0]
+    assert (line["kind"], line["amount"], line["status"], line["counterparty"]) == ("card", "-23.00", "paid", "Coffee Co")
+
+
+def test_card_payment_over_the_balance_is_declined(issuing):
+    assert send_event(issuing, "issuing_authorization.request", auth("iauth_2", 6000)).json() == {"approved": False}
+    assert balance(issuing) == "50.00"
+
+
+def test_reversed_hold_and_late_capture_in_any_order(issuing):
+    send_event(issuing, "issuing_authorization.request", auth("iauth_3", 1500))
+    send_event(issuing, "issuing_authorization.updated", auth("iauth_3", 0, status="reversed"))
+    assert balance(issuing) == "50.00"
+    assert issuing.get("/api/me").json()["transactions"][0]["status"] == "failed"
+    # A capture that arrives after the close still charges what the merchant took
+    send_event(issuing, "issuing_transaction.created", {"id": "ipi_3", "type": "capture", "amount": -1000, "currency": "usd", "authorization": "iauth_3", "card": "ic_1"})
+    assert balance(issuing) == "40.00"
+
+
+def test_refund_and_timeout_approval(issuing):
+    send_event(issuing, "issuing_transaction.created", {"id": "ipi_r", "type": "refund", "amount": 500, "currency": "usd",
+                                                         "card": {"id": "ic_1", "metadata": {"user": "alice"}}, "merchant_data": {"name": "Shop"}})
+    assert balance(issuing) == "55.00"
+    # Stripe approved without asking (timeout): held anyway, even past the balance
+    send_event(issuing, "issuing_authorization.created", auth("iauth_t", 6000))
+    assert balance(issuing) == "-5.00"
+
+
+def test_card_webhook_needs_a_valid_signature(issuing):
+    assert send_event(issuing, "issuing_authorization.request", auth("iauth_x", 100), secret="whsec_wrong").status_code == 400
+    assert balance(issuing) == "50.00"
+
+
+def test_cards_only_for_their_owner_and_once(issuing, as_user, monkeypatch):
+    monkeypatch.setattr(stripe_client, "card_ephemeral_key", lambda card_id, nonce: {"secret": "ek_test"})
+    monkeypatch.setattr(stripe_client, "set_card_status", lambda card_id, status: {"status": status})
+    assert issuing.post("/api/cards/ic_1/reveal", json={"nonce": "n"}).json()["secret"] == "ek_test"
+    assert issuing.post("/api/cards/ic_1/freeze", json={"frozen": True}).json()["card"]["status"] == "inactive"
+    application = {"firstName": "Alice", "lastName": "Smith", "dob": "1990-04-01", "line1": "1 Main St", "city": "Austin", "postalCode": "78701", "acceptTerms": True}
+    assert issuing.post("/api/cards", json=application).status_code == 400
+    bob = as_user(BOB)
+    assert bob.post("/api/cards/ic_1/reveal", json={"nonce": "n"}).status_code == 400
+    assert bob.post("/api/cards/ic_1/freeze", json={"frozen": True}).status_code == 400
+
+
+def test_cards_wait_for_issuing(as_user, monkeypatch):
+    monkeypatch.setattr(cards, "_status", (time.time(), False))
+    alice = as_user(ALICE)
+    status = alice.get("/api/cards").json()
+    assert status["live"] is False and status["cards"] == []
+    assert alice.post("/api/cards", json={}).status_code == 409
+    assert alice.post("/api/cards/waitlist").json()["waitlisted"] is True
+    assert alice.get("/api/cards").json()["waitlisted"] is True

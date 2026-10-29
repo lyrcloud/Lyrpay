@@ -5,7 +5,7 @@ export type Profile = { name: string; email: string; phone: string; currency: st
 export type Transaction = {
   id: string;
   at: string;
-  kind: 'topup' | 'send' | 'receive' | 'convert' | 'withdraw' | 'giftcard' | 'redeem' | 'refund' | 'bonus';
+  kind: 'topup' | 'send' | 'receive' | 'convert' | 'withdraw' | 'giftcard' | 'redeem' | 'refund' | 'bonus' | 'card';
   currency: string;
   amount: string;
   status?: 'pending' | 'paid' | 'failed';
@@ -15,6 +15,16 @@ export type Transaction = {
   toAmount?: string;
   reference?: string;
   batch?: boolean;
+};
+
+export type Card = {
+  cardId: string; last4: string; brand: string; expMonth: number; expYear: number; currency: string;
+  status: 'active' | 'inactive' | 'canceled'; created: string; name: string;
+};
+
+export type CardsInfo = {
+  live: boolean; country: string; currency: string; eligible: boolean; cards: Card[]; waitlisted: boolean;
+  publishableKey: string; termsUrl: string;
 };
 
 export type Business = {
@@ -59,6 +69,7 @@ export type AdminOverview = {
     users: number; newUsers: number; heldUsd: number; transactions: number; volumeUsd: number;
     pendingWithdrawals: number; unsubscribed: number; giftCardsOutstandingUsd: number; giftCardsSold: number;
     activeCoupons: number; referrals: number; businesses: number; businessApplications: number;
+    cardsIssued: number; cardWaitlist: number;
   };
   held: { currency: string; amount: string; usd: number }[];
   byKind: Partial<Record<Transaction['kind'], { count: number; volumeUsd: number }>>;
@@ -119,6 +130,11 @@ export const api = {
   applyBusiness: (fields: Partial<Business>) => post<{ business: Business }>('/business/apply', fields),
   bulkPay: (currency: string, payments: { to: string; amount: string; note: string }[]) =>
     post<{ paid: number; total: string; currency: string } & Statement>('/business/pay', { currency, payments }),
+  cards: () => request<CardsInfo>('/cards'),
+  joinCardWaitlist: () => post<{ waitlisted: boolean }>('/cards/waitlist', {}),
+  newCard: (fields: Record<string, string | boolean>) => post<{ card: Card }>('/cards', fields),
+  freezeCard: (id: string, frozen: boolean) => post<{ card: Card }>(`/cards/${encodeURIComponent(id)}/freeze`, { frozen }),
+  revealCard: (id: string, nonce: string) => post<{ secret: string; version: string }>(`/cards/${encodeURIComponent(id)}/reveal`, { nonce }),
   adminCoupons: () => request<{ coupons: Coupon[] }>('/admin/coupons'),
   createCoupon: (coupon: Partial<Coupon>) => post<{ coupon: Coupon }>('/admin/coupons', coupon),
   toggleCoupon: (code: string, active: boolean) =>

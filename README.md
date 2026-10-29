@@ -17,6 +17,8 @@ Live: https://lyrpay.com
 - **Promo codes**: made by the admin. A code adds a bonus to a top-up (a percentage up to a cap, or a fixed amount), with a minimum top-up, a usage limit, once per person and an expiry. Checked when checkout starts and again when the payment is confirmed; the bonus goes in the same transaction as the top-up.
 - **Referrals**: everyone has a link (`lyrpay.com/?ref=CODE`), remembered for 30 days like Lyrtrip's. When a referred friend's first top-up of at least the minimum is paid, the referrer gets a bonus (and the friend, if set), once. Defaults: $5 to the referrer, nothing to the friend, $20 minimum; the admin changes them under Rewards settings.
 - **Business accounts (B2B)**: a business applies with its registration details; the admin approves or rejects it and the applicant is emailed. Approved businesses convert at the business fee (0.25% by default), show their company name on payments, and pay up to 30 people at once, all or nothing.
+- **Lyrpay Visa cards** (Card tab, through Stripe Issuing): a virtual card that spends from the person's balance in the card's currency. Stripe asks Lyrpay to approve each payment (`/api/stripe/issuing`); it's approved only if the balance covers it, and held at once. Captures, tips, reversals, expiries and refunds are settled against the hold, each Stripe event applied once and in any order. Card numbers are shown by Stripe.js in Stripe's frames, never by Lyrpay. Until Issuing is on, the tab shows the card and a waitlist.
+- **Sign-up codes**: the shared account pool sends them through SES from `no-reply@lyrcloud.com`, branded Lyrpay for Lyrpay's app client (the `lyr-auth-messages` function in Lyrtrip's `infra/cognito.yml`). The sign-up screen can send a new code.
 - **Super admin** (`lyrpay.com/#admin`): accounts, money held, daily volume, volume by type and the latest activity across everyone, plus Promo codes, Businesses (review applications) and Rewards settings. Only verified emails in `ADMIN_EMAILS` (default `lyrclouds@gmail.com`) see it; the API checks this on every request.
 - **Web3 wallet**: connects a browser wallet and shows its address, chain and native balance.
 
@@ -59,6 +61,16 @@ aws lambda invoke --function-name lyrpay-send-update --cli-binary-format raw-in-
 ```
 
 To announce something new, add a campaign to `UPDATES`, deploy, and invoke it the same way.
+
+### Switch on Lyrpay cards (Stripe Issuing)
+
+1. In the Stripe dashboard, apply for **Issuing** (Stripe reviews the business; cards go to people in the platform's country).
+2. Add a webhook endpoint `https://lyrpay.com/api/stripe/issuing` for `issuing_authorization.request`, `issuing_authorization.created`, `issuing_authorization.updated`, `issuing_transaction.created` and `issuing_card.updated`, and save its signing secret:
+   `aws secretsmanager create-secret --name lyrpay/stripe-issuing-webhook --secret-string 'whsec_...'`
+3. Under Issuing settings, set the authorization timeout default to **decline**, and add money to the **Issuing balance**: card spending is paid from it, while Lyrpay debits people's balances.
+4. Deploy with the publishable key and your program's cardholder terms: `STRIPE_PUBLISHABLE_KEY=pk_live_... CARD_TERMS_URL=https://... ./deploy.sh` (kept for later deploys).
+
+The Card tab switches from the waitlist to sign-up within 10 minutes. A schedule pings the API every 5 minutes so authorizations, which Stripe gives 2 seconds, rarely meet a cold start.
 
 ### Switch on card payments and withdrawals
 

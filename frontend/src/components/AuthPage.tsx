@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   confirmForgotPassword,
   confirmSignUp,
@@ -49,6 +49,13 @@ export default function AuthPage({ onSignedIn }: { onSignedIn: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [info, setInfo] = useState('');
+  // Seconds until another code can be asked for, so a double tap doesn't burn the sending limit
+  const [wait, setWait] = useState(0);
+  useEffect(() => {
+    if (!wait) return;
+    const timer = setTimeout(() => setWait(w => w - 1), 1000);
+    return () => clearTimeout(timer);
+  }, [wait]);
 
   const phone = () => {
     const e164 = toE164(number, country);
@@ -74,7 +81,21 @@ export default function AuthPage({ onSignedIn }: { onSignedIn: () => void }) {
     setCode('');
     setStep(next);
     setInfo(text);
+    setWait(30);
   };
+
+  const resend = run(async () => {
+    if (step === 'reset') {
+      if (via === 'phone') await sendPhoneCode(phone(), 'reset');
+      else await forgotPassword(email.trim().toLowerCase());
+    } else if (via === 'phone') {
+      await sendPhoneCode(phone(), 'signup');
+    } else {
+      await resendConfirmation(email.trim().toLowerCase());
+    }
+    setInfo(via === 'phone' ? `We texted a new code to ${phone()}.` : `We emailed a new code to ${email}. It can take a minute; check your spam folder too.`);
+    setWait(30);
+  });
 
   const submit = run(async () => {
     if (mode === 'signin') {
@@ -231,6 +252,12 @@ export default function AuthPage({ onSignedIn }: { onSignedIn: () => void }) {
               )}
               {error && <p className="error" role="alert">{error}</p>}
               <button className="button primary" disabled={busy}>{busy ? 'Please wait…' : 'Continue'}</button>
+              <p className="hint center">
+                {via === 'email' ? "Didn't get it? Check your spam folder, or " : "Didn't get it? "}
+                <button type="button" className="link" disabled={busy || wait > 0} onClick={() => resend()}>
+                  {wait > 0 ? `send a new code in ${wait}s` : 'send a new code'}
+                </button>
+              </p>
               <button type="button" className="link" onClick={() => switchMode(mode)}>Back</button>
             </form>
           )}

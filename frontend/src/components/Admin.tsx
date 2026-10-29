@@ -15,6 +15,7 @@ const KIND: Record<Transaction['kind'], { label: string; color: string }> = {
   redeem: { label: 'Redeemed', color: 'var(--c3)' },
   refund: { label: 'Refunded', color: 'var(--muted)' },
   bonus: { label: 'Bonuses', color: 'var(--c4)' },
+  card: { label: 'Card payments', color: 'var(--c2)' },
 };
 
 // The second half of money already counted (a transfer's receive, a gift card's redeem or refund)
@@ -218,6 +219,7 @@ function Overview({ onWaiting, onOpen }: { onWaiting: (n: number) => void; onOpe
           <strong>{t.businesses}</strong>
           <em className={t.businessApplications ? 'warn-text' : ''}>{t.businessApplications ? `${t.businessApplications} waiting for review →` : 'none waiting'}</em>
         </button>
+        <Kpi label="Lyrpay cards" value={t.cardsIssued} format={n => Math.round(n).toString()} note={`${t.cardWaitlist} on the waitlist`} tone="k5" />
         <button className="kpi kpi-button k4" onClick={() => onOpen('coupons')}>
           <span>Active promo codes</span>
           <strong>{t.activeCoupons}</strong>

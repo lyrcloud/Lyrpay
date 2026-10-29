@@ -359,6 +359,40 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .bulk-total span { color: var(--muted); font-size: 0.88rem; }
 .bulk-total strong { font-size: 1.3rem; font-variant-numeric: tabular-nums; }
 
+/* Cards */
+.paycard { --shine-x: 30%; --shine-y: 20%; position: relative; overflow: hidden; aspect-ratio: 1.586; width: 100%; max-width: 400px; border-radius: 20px; padding: 22px 24px; color: #fff; display: grid; grid-template-rows: auto 1fr auto auto; gap: 8px; background: radial-gradient(120% 140% at 0% 0%, #2a2f6b 0%, #14183a 45%, #070914 100%); box-shadow: 0 22px 50px rgb(11 16 32 / 0.45), inset 0 0 0 1px rgb(255 255 255 / 0.08); transition: transform 0.15s ease-out, filter 0.3s ease; user-select: none; }
+.paycard::before { content: ''; position: absolute; inset: 0; background: radial-gradient(circle at var(--shine-x) var(--shine-y), rgb(255 255 255 / 0.22), transparent 42%); pointer-events: none; }
+.paycard::after { content: ''; position: absolute; inset: auto -30% -60% 35%; height: 120%; background: conic-gradient(from 200deg, #7c5cff, #18c8e8, #7c5cff); opacity: 0.35; filter: blur(30px); pointer-events: none; }
+.paycard > * { position: relative; z-index: 1; }
+.paycard.frozen { filter: grayscale(0.85) brightness(0.9); }
+.paycard.demo { animation: float-card 6s ease-in-out infinite; }
+.paycard-top { display: flex; justify-content: space-between; align-items: center; }
+.paycard-kind { font-size: 0.72rem; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; opacity: 0.8; }
+.paycard-chip { width: 44px; height: 32px; border-radius: 7px; background: linear-gradient(135deg, #f6d98b, #c9a24a 50%, #f1d27a); box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.15); align-self: center; }
+.paycard-number { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: clamp(1rem, 4.4vw, 1.3rem); letter-spacing: 0.12em; min-height: 26px; }
+.paycard-bottom { display: grid; grid-template-columns: 1.6fr 0.8fr 0.6fr auto; gap: 10px; align-items: end; }
+.paycard-bottom div { display: flex; flex-direction: column; min-width: 0; }
+.paycard-bottom small { font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.1em; opacity: 0.6; }
+.paycard-bottom span { font-size: 0.86rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.visa { font-style: italic; font-weight: 900 !important; font-size: 1.4rem !important; letter-spacing: -0.02em; }
+.stripe-slot { min-height: 22px; min-width: 40px; }
+.cards-hero { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; align-items: start; }
+.cards-pitch p { margin: 0 0 8px; }
+.cards-pitch .auth-points { margin: 16px 0 20px; }
+.cards-visual { display: flex; flex-direction: column; gap: 20px; align-items: center; position: relative; z-index: 1; }
+.cards-visual .form { width: 100%; }
+.mycard { display: grid; grid-template-columns: minmax(0, 400px) 1fr; gap: 28px; align-items: center; }
+.mycard-side { display: flex; flex-direction: column; gap: 14px; }
+.mycard-balance { display: flex; flex-direction: column; padding: 16px; border-radius: 14px; background: var(--surface-2); }
+.mycard-balance span { color: var(--muted); font-size: 0.85rem; }
+.mycard-balance strong { font-size: 1.9rem; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.mycard-balance em { font-style: normal; color: var(--muted); font-size: 0.8rem; }
+.mycard-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.three-col { display: grid; grid-template-columns: 1.4fr 0.8fr 1fr; gap: 12px; }
+.form label.check span { font-weight: 500; }
+.form label.check a { color: var(--accent); }
+@keyframes float-card { 0%, 100% { transform: translateY(0) rotate(-2deg); } 50% { transform: translateY(-8px) rotate(1deg); } }
+
 /* Admin sections */
 .admin-nav { display: flex; gap: 4px; padding: 4px; border-radius: 12px; background: var(--surface-2); align-self: flex-start; max-width: 100%; overflow-x: auto; }
 .admin-nav button { border: none; background: none; color: var(--muted); padding: 8px 14px; border-radius: 9px; font-weight: 600; white-space: nowrap; display: inline-flex; align-items: center; gap: 8px; }
@@ -461,7 +495,7 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
   .span-2 { grid-column: auto; }
   .hide-sm { display: none; }
   .admin-grid { grid-template-columns: 1fr; }
-  .business-hero, .perks, .two-col { grid-template-columns: 1fr; }
+  .business-hero, .perks, .two-col, .cards-hero, .mycard, .three-col { grid-template-columns: 1fr; }
   .referral-stats { grid-template-columns: 1fr 1fr; }
   .bulk-row { grid-template-columns: minmax(0, 1fr) 90px 36px; }
   .bulk-row input:nth-child(3) { grid-column: 1 / 3; }

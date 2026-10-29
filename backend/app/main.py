@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import re
@@ -10,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
-from app import ledger, mail, rates, rewards, stripe_client
+from app import cards, ledger, mail, rates, rewards, stripe_client
 from app.auth import User, current_user
 from app.money import exponent, from_minor, parse_amount, quantize
 
@@ -35,6 +36,11 @@ app.add_middleware(
 
 @app.exception_handler(ValueError)
 def value_error(_: Request, error: ValueError):
+    return JSONResponse(status_code=400, content={"detail": str(error)})
+
+
+@app.exception_handler(cards.CardError)
+def card_error(_: Request, error: cards.CardError):
     return JSONResponse(status_code=400, content={"detail": str(error)})
 
 
@@ -185,6 +191,8 @@ def admin_overview(days: int = 14, _: User = Depends(admin_user)):
             "referrals": sum(1 for p in data["profiles"] if p.get("referredBy")),
             "businesses": sum(1 for p in data["profiles"] if rewards.is_business(p)),
             "businessApplications": sum(1 for p in data["profiles"] if (p.get("business") or {}).get("status") == "pending"),
+            "cardsIssued": sum(1 for c in data["cards"] if c.get("status") != "canceled"),
+            "cardWaitlist": sum(1 for p in data["profiles"] if p.get("cardWaitlist")),
         },
         "held": sorted(
             ({"currency": c, "amount": money(a, c), "usd": round(in_usd(a, c), 2)} for c, a in held.items()),
@@ -724,3 +732,71 @@ def admin_settings(_: User = Depends(admin_user)):
 @app.put("/api/admin/settings")
 def admin_save_settings(body: dict, admin: User = Depends(admin_user)):
     return {"settings": rewards.public_settings(rewards.save_settings(body, admin.email)), "standardFeeBps": int(FX_FEE_BPS)}
+
+
+
+# ── Cards (Stripe Issuing) ───────────────────────────────────────────────────
+
+@app.get("/api/cards")
+def my_cards(user: User = Depends(current_user)):
+    profile = ledger.ensure_profile(user)
+    live = cards.issuing_live()
+    platform = stripe_call(stripe_client.platform) if live else {}
+    return {
+        "live": live, "country": platform.get("country", ""), "currency": platform.get("currency", ""),
+        "eligible": live and profile.get("country") == platform.get("country"),
+        "cards": cards.cards_of(user.sub), "waitlisted": bool(profile.get("cardWaitlist")),
+        "publishableKey": cards.PUBLISHABLE_KEY, "termsUrl": cards.CARD_TERMS_URL,
+    }
+
+
+@app.post("/api/cards/waitlist")
+def card_waitlist(user: User = Depends(current_user)):
+    ledger.ensure_profile(user)
+    ledger.update_profile(user.sub, cardWaitlist=ledger._now())
+    return {"waitlisted": True}
+
+
+@app.post("/api/cards")
+def new_card(body: dict, request: Request, user: User = Depends(current_user)):
+    if not cards.issuing_live():
+        raise HTTPException(status_code=409, detail="Lyrpay cards aren't available yet. Join the waitlist and we'll email you.")
+    details = cards.clean_application(body)
+    ip = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip() or (request.client.host if request.client else "")
+    card = stripe_call(cards.issue_card, ledger.ensure_profile(user), details, ip, request.headers.get("user-agent", ""))
+    return {"card": card}
+
+
+class CardFreeze(BaseModel):
+    frozen: bool
+
+
+@app.post("/api/cards/{card_id}/freeze")
+def freeze_card(card_id: str, body: CardFreeze, user: User = Depends(current_user)):
+    return {"card": stripe_call(cards.set_frozen, user.sub, card_id, body.frozen)}
+
+
+class CardReveal(BaseModel):
+    nonce: str
+
+
+@app.post("/api/cards/{card_id}/reveal")
+def reveal_card(card_id: str, body: CardReveal, user: User = Depends(current_user)):
+    """An ephemeral key so Stripe.js can show this card's details; only for the card's owner."""
+    cards.card_of(user.sub, card_id)
+    key = stripe_call(stripe_client.card_ephemeral_key, card_id, body.nonce)
+    return {"secret": key["secret"], "version": stripe_client.EPHEMERAL_KEY_VERSION}
+
+
+@app.post("/api/stripe/issuing")
+async def issuing_webhook(request: Request):
+    """Stripe Issuing events. Authorization requests are answered in the response, within Stripe's 2 seconds."""
+    payload = await request.body()
+    secret = cards.webhook_secret()
+    if not secret or not cards.verify(payload, request.headers.get("stripe-signature", ""), secret):
+        raise HTTPException(status_code=400, detail="Bad signature.")
+    event = json.loads(payload)
+    answer = cards.handle_event(event)
+    if answer is None:
+        return {"received": True}
+    return JSONResponse(answer, headers={"Stripe-Version": event.get("api_version") or ""})

@@ -330,7 +330,7 @@ def release_update(campaign: str, email: str):
 def everything() -> dict[str, list[dict]]:
     """The whole ledger in one scan, grouped for the admin overview: profiles, balances, transactions, opt-outs."""
     groups: dict[str, list[dict]] = {
-        "profiles": [], "balances": [], "transactions": [], "optouts": [], "gifts": [], "coupons": [],
+        "profiles": [], "balances": [], "transactions": [], "optouts": [], "gifts": [], "coupons": [], "cards": [],
     }
     for item in _scan():
         sk = item["sk"]
@@ -338,6 +338,8 @@ def everything() -> dict[str, list[dict]]:
             groups["profiles"].append(item)
         elif sk.startswith("BAL#"):
             groups["balances"].append(item)
+        elif sk.startswith("CARD#"):
+            groups["cards"].append(item)
         elif sk.startswith("TX#"):
             groups["transactions"].append(item)
         elif sk == "OPTOUT":

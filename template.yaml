@@ -20,6 +20,15 @@ Parameters:
     Default: ''
     Description: Issued us-east-1 ACM certificate for lyrpay.com and www.lyrpay.com. Empty serves only the CloudFront domain.
 
+  StripePublishableKey:
+    Type: String
+    Default: ''
+    Description: Stripe publishable key (pk_...), for showing card details with Stripe.js once Issuing is on.
+  CardTermsUrl:
+    Type: String
+    Default: ''
+    Description: Link to the cardholder terms of your Stripe Issuing program, shown when someone gets a card.
+
 Conditions:
   HasDomain: !Not [!Equals [!Ref CertificateArn, '']]
 
@@ -37,6 +46,8 @@ Globals:
         LEDGER_TABLE: !Ref LedgerTable
         ALLOWED_ORIGINS: !Sub '${PrimaryOrigin},https://lyrpay.com,https://www.lyrpay.com,http://localhost:5173'
         STRIPE_SECRET_ID: lyrpay/stripe
+        STRIPE_PUBLISHABLE_KEY: !Ref StripePublishableKey
+        CARD_TERMS_URL: !Ref CardTermsUrl
         FX_FEE_BPS: !Ref FxFeeBps
         MAIL_SIGNING_SECRET_ID: !Ref MailSigningSecret
         SITE_URL: !Ref PrimaryOrigin
@@ -124,6 +135,13 @@ Resources:
               Resource: !Sub 'arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/lyrpay.com'
       FunctionUrlConfig:
         AuthType: NONE
+      Events:
+        # Keeps an instance warm: Stripe gives card authorizations 2 seconds, less than a cold start
+        Warm:
+          Type: Schedule
+          Properties:
+            Schedule: rate(5 minutes)
+            Input: '{"warm": true}'
 
   # Finishes withdrawals Stripe didn't answer, for people who don't open their wallet again
   SweepFunction:

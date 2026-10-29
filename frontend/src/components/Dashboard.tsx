@@ -4,6 +4,7 @@ import { currentUser, signOut } from '../lib/auth';
 import { COUNTRIES, currencyName, currencyOf, flag, formatMoney, guessCountry } from '../lib/format';
 import Admin from './Admin';
 import Business from './Business';
+import Cards from './Cards';
 import Rewards from './Rewards';
 import { forgetReferral, pendingReferral } from '../lib/referral';
 import LiveMarkets, { Ticker } from './LiveMarkets';
@@ -11,10 +12,10 @@ import Logo from './Logo';
 import { AddMoney, Convert, CurrencySelect, SendMoney, Withdraw } from './MoneyActions';
 import { Activity, Connections } from './Panels';
 
-type Tab = 'wallet' | 'rewards' | 'business' | 'markets' | 'connect' | 'admin';
-const TABS: Tab[] = ['wallet', 'rewards', 'business', 'markets', 'connect', 'admin'];
+type Tab = 'wallet' | 'cards' | 'rewards' | 'business' | 'markets' | 'connect' | 'admin';
+const TABS: Tab[] = ['wallet', 'cards', 'rewards', 'business', 'markets', 'connect', 'admin'];
 const TAB_LABEL: Record<Tab, string> = {
-  wallet: 'Wallet', rewards: 'Rewards', business: 'Business', markets: 'Markets', connect: 'Connections', admin: '★ Admin',
+  wallet: 'Wallet', cards: 'Card', rewards: 'Rewards', business: 'Business', markets: 'Markets', connect: 'Connections', admin: '★ Admin',
 };
 type Action = 'add' | 'send' | 'convert' | 'withdraw';
 
@@ -177,6 +178,7 @@ export default function Dashboard({ onSignedOut }: { onSignedOut: () => void }) 
           </div>
         )}
 
+        {tab === 'cards' && <Cards balances={statement.balances} />}
         {tab === 'rewards' && <Rewards {...shared} giftCode={giftCode} />}
         {tab === 'business' && <Business {...shared} country={profile?.country ?? ''} />}
         {tab === 'markets' && <section className="card"><LiveMarkets home={home} key={home} /></section>}
