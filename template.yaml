@@ -38,6 +38,8 @@ Globals:
         ALLOWED_ORIGINS: !Sub '${PrimaryOrigin},https://lyrpay.com,https://www.lyrpay.com,http://localhost:5173'
         STRIPE_SECRET_ID: lyrpay/stripe
         FX_FEE_BPS: !Ref FxFeeBps
+        MAIL_SIGNING_SECRET_ID: !Ref MailSigningSecret
+        SITE_URL: !Ref PrimaryOrigin
 
 Resources:
   LedgerTable:
@@ -93,6 +95,15 @@ Resources:
       PreventUserExistenceErrors: ENABLED
       EnableTokenRevocation: true
 
+  # Signs the unsubscribe links in Lyrpay emails
+  MailSigningSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: lyrpay/mail-signing
+      GenerateSecretString:
+        PasswordLength: 48
+        ExcludePunctuation: true
+
   ApiFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -105,7 +116,12 @@ Resources:
         - Statement:
             - Effect: Allow
               Action: secretsmanager:GetSecretValue
-              Resource: !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:lyrpay/stripe-*'
+              Resource:
+                - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:lyrpay/stripe-*'
+                - !Ref MailSigningSecret
+            - Effect: Allow
+              Action: ses:SendEmail
+              Resource: !Sub 'arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/lyrpay.com'
       FunctionUrlConfig:
         AuthType: NONE
 
@@ -128,6 +144,27 @@ Resources:
           Type: Schedule
           Properties:
             Schedule: rate(15 minutes)
+
+  # Sends an announcement from app/mail.py UPDATES to every Lyr account; invoked by hand (README)
+  UpdateEmailFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: lyrpay-send-update
+      Handler: app.mail.handler
+      Timeout: 900
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LedgerTable
+        - Statement:
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Ref MailSigningSecret
+            - Effect: Allow
+              Action: ses:SendEmail
+              Resource: !Sub 'arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/lyrpay.com'
+            - Effect: Allow
+              Action: cognito-idp:ListUsers
+              Resource: !Sub 'arn:aws:cognito-idp:${AWS::Region}:${AWS::AccountId}:userpool/${UserPoolId}'
 
   SiteBucket:
     Type: AWS::S3::Bucket

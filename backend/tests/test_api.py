@@ -8,8 +8,9 @@ from moto import mock_aws
 
 os.environ.setdefault("AWS_DEFAULT_REGION", "us-east-1")
 os.environ.setdefault("STRIPE_SECRET_KEY", "sk_test_dummy")
+os.environ.setdefault("MAIL_SIGNING_KEY", "test-signing-key")
 
-from app import ledger, main, rates, stripe_client  # noqa: E402
+from app import ledger, mail, main, rates, stripe_client  # noqa: E402
 from app.auth import User, current_user, user_from_claims  # noqa: E402
 from app.money import parse_amount, quantize  # noqa: E402
 
@@ -45,6 +46,7 @@ def aws(monkeypatch):
             BillingMode="PAY_PER_REQUEST",
         )
         monkeypatch.setattr(ledger, "_table", None)
+        monkeypatch.setattr(mail, "send", lambda *args, **kwargs: None)
         monkeypatch.setattr(rates, "usd_rates", lambda: {"updated": "today", "rates": {"USD": 1, "EUR": 0.9, "JPY": 150}})
         yield
 
@@ -231,3 +233,52 @@ def test_sweep_settles_withdrawals_for_people_who_never_return(as_user, payouts_
 
 original = ledger.pending_withdrawals
 original_all = ledger.all_pending_withdrawals
+
+
+@pytest.fixture
+def outbox(monkeypatch):
+    sent = []
+    monkeypatch.setattr(mail, "send", lambda to, subject, text, html, unsubscribe="": sent.append((to, subject, text)))
+    monkeypatch.setattr(mail, "SEND_INTERVAL_SECONDS", 0)
+    return sent
+
+
+def test_welcome_email_goes_out_once(as_user, outbox):
+    alice = as_user(ALICE)
+    alice.get("/api/me")
+    alice.get("/api/me")
+    as_user(BOB).get("/api/me")  # mobile-number account with no email
+    assert [(to, subject) for to, subject, _ in outbox] == [("alice@example.com", "Welcome to Lyrpay!")]
+    assert "Welcome to Lyrpay, Alice!" in outbox[0][2]
+
+
+def test_update_reaches_everyone_once_and_respects_unsubscribe(as_user, outbox):
+    carol = User(sub="carol", email="carol@example.com", phone="", name="Carol King")
+    for user in (ALICE, BOB, carol):
+        as_user(user).get("/api/me")
+    outbox.clear()
+
+    preview = mail.send_update("lyrpay-live-2026-10")
+    assert preview["dryRun"] and preview["emails"] == ["alice@example.com", "carol@example.com"] and not outbox
+
+    token = mail.unsubscribe_token("carol@example.com")
+    page = as_user(ALICE).get(f"/api/unsubscribe?t={token}")
+    assert page.status_code == 200 and "unsubscribed" in page.text
+    assert as_user(ALICE).post("/api/unsubscribe?t=forged.token").status_code == 400
+
+    first = mail.send_update("lyrpay-live-2026-10", dry_run=False)
+    again = mail.send_update("lyrpay-live-2026-10", dry_run=False)
+    assert (first["sent"], again["sent"], again["skipped"]) == (1, 0, 1)
+    assert [(to, subject) for to, subject, _ in outbox] == [("alice@example.com", "Lyrpay is live at lyrpay.com")]
+    assert "Lyrpay is live, Alice" in outbox[0][2] and "/api/unsubscribe?t=" in outbox[0][2]
+
+
+def test_failed_update_send_can_be_retried(as_user, monkeypatch):
+    as_user(ALICE).get("/api/me")
+    def refuse(*args, **kwargs):
+        raise RuntimeError("SES is down")
+    monkeypatch.setattr(mail, "send", refuse)
+    monkeypatch.setattr(mail, "SEND_INTERVAL_SECONDS", 0)
+    assert mail.send_update("lyrpay-live-2026-10", dry_run=False)["failed"] == 1
+    monkeypatch.setattr(mail, "send", lambda *args, **kwargs: None)
+    assert mail.send_update("lyrpay-live-2026-10", dry_run=False)["sent"] == 1

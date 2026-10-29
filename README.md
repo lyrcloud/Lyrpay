@@ -2,7 +2,7 @@
 
 Hold, send and convert money in every currency, top up through Stripe, and follow the crypto markets.
 
-Live: https://d2figysrc1xdl9.cloudfront.net (lyrpay.com once its DNS points here, see below)
+Live: https://lyrpay.com
 
 ## What works today
 
@@ -39,6 +39,21 @@ Needs AWS credentials, the SAM CLI and Node 20+.
 ```
 
 The first run creates the stack, then redeploys once so sign-in callbacks and payment redirects use the new CloudFront domain.
+
+### Emails
+
+Sent through SES from `support@lyrpay.com` (`backend/app/mail.py`); each has a signed one-click unsubscribe link (`/api/unsubscribe`).
+
+- **Welcome**: once per person, the first time their wallet opens with an email on it.
+- **Updates**: announcements in `UPDATES`, sent by the `lyrpay-send-update` Lambda to every Lyr account that finished signing up (and every Lyrpay profile), minus anyone who unsubscribed. Each address gets a campaign at most once, so a rerun only reaches people added since. Preview the list first, then send:
+
+```bash
+aws lambda invoke --function-name lyrpay-send-update --cli-binary-format raw-in-base64-out \
+  --payload '{"campaign": "lyrpay-live-2026-10", "dryRun": true}' /dev/stdout
+# then "dryRun": false; add "only": ["you@example.com"] to try it on one address
+```
+
+To announce something new, add a campaign to `UPDATES`, deploy, and invoke it the same way.
 
 ### Switch on card payments and withdrawals
 

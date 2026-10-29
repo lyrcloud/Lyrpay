@@ -15,6 +15,8 @@ from app.auth import User
 #   USER#<sub>   TX#<iso>#<id>    one line of the statement
 #   HANDLE#<email|phone>  HANDLE  sub, so people can be paid by email or number
 #   TOPUP#<session>       TOPUP   marks a Stripe payment as credited, once
+#   OPTOUT#<email>        OPTOUT  unsubscribed from Lyrpay emails
+#   UPDATE#<campaign>     <email> an announcement email sent (or being sent) to that address, once
 # Pending withdrawals also carry queue="withdraw", which puts them (and only them) in the sparse
 # "pending" index, so the scheduled sweep finds them without scanning the table.
 TABLE_NAME = os.getenv("LEDGER_TABLE", "lyrpay-ledger")
@@ -229,3 +231,62 @@ def fail_withdrawal(tx: dict):
             "ExpressionAttributeValues": {":s": "failed", ":pending": "pending"},
         }},
     ], AlreadyApplied())
+
+
+def mark_welcomed(sub: str) -> bool:
+    """Record that the welcome email is going out; False if it already went."""
+    try:
+        table().update_item(
+            Key={"pk": f"USER#{sub}", "sk": "PROFILE"},
+            UpdateExpression="SET welcomed = :at",
+            ConditionExpression="attribute_exists(pk) AND attribute_not_exists(welcomed)",
+            ExpressionAttributeValues={":at": _now()},
+        )
+        return True
+    except ClientError as error:
+        if error.response["Error"]["Code"] == "ConditionalCheckFailedException":
+            return False
+        raise
+
+
+def _scan(**kwargs) -> list[dict]:
+    items, start = [], {}
+    while True:
+        page = table().scan(**kwargs, **start)
+        items += page["Items"]
+        if "LastEvaluatedKey" not in page:
+            return items
+        start = {"ExclusiveStartKey": page["LastEvaluatedKey"]}
+
+
+def profiles() -> list[dict]:
+    return _scan(FilterExpression=Attr("sk").eq("PROFILE"))
+
+
+def opt_out(email: str):
+    table().put_item(Item={"pk": f"OPTOUT#{email}", "sk": "OPTOUT", "at": _now()})
+
+
+def opted_out(email: str) -> bool:
+    return bool(table().get_item(Key={"pk": f"OPTOUT#{email}", "sk": "OPTOUT"}).get("Item"))
+
+
+def opted_out_emails() -> set[str]:
+    return {item["pk"].removeprefix("OPTOUT#") for item in _scan(FilterExpression=Attr("sk").eq("OPTOUT"))}
+
+
+def claim_update(campaign: str, email: str) -> bool:
+    """Reserve one send of a campaign to an address; False if it was already sent."""
+    try:
+        table().put_item(
+            Item={"pk": f"UPDATE#{campaign}", "sk": email, "at": _now()}, ConditionExpression="attribute_not_exists(pk)",
+        )
+        return True
+    except ClientError as error:
+        if error.response["Error"]["Code"] == "ConditionalCheckFailedException":
+            return False
+        raise
+
+
+def release_update(campaign: str, email: str):
+    table().delete_item(Key={"pk": f"UPDATE#{campaign}", "sk": email})

@@ -6,10 +6,10 @@ from decimal import Decimal
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
-from app import ledger, rates, stripe_client
+from app import ledger, mail, rates, stripe_client
 from app.auth import User, current_user
 from app.money import exponent, from_minor, parse_amount, quantize
 
@@ -93,6 +93,10 @@ async def phone_auth(action: str, request: Request):
 def me(user: User = Depends(current_user)):
     profile = ledger.ensure_profile(user)
     settle_withdrawals(user.sub, profile)
+    try:
+        mail.welcome(profile)
+    except Exception:
+        logger.exception("Welcome email for %s failed", user.sub)
     return {
         "profile": {k: profile.get(k, "") for k in ("name", "email", "phone", "currency", "country")},
         **statement(user.sub),
@@ -113,6 +117,25 @@ def update_me(body: ProfileUpdate, user: User = Depends(current_user)):
         user.sub, currency=currency_code(body.currency) if body.currency else None, country=country,
     )
     return {"profile": {k: profile.get(k, "") for k in ("name", "email", "phone", "currency", "country")}}
+
+
+UNSUBSCRIBED_PAGE = """<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Unsubscribed · Lyrpay</title></head><body style="margin:0;background:#f5f6fb;font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif">
+<div style="max-width:480px;margin:48px auto;padding:28px;background:#fff;border-radius:14px;color:#1f2937">
+<a href="/" style="color:#5b5bf6;font-size:24px;font-weight:800;text-decoration:none">Lyrpay</a>
+<h1 style="font-size:20px">{heading}</h1><p style="line-height:1.55">{body}</p></div></body></html>"""
+
+
+@app.api_route("/api/unsubscribe", methods=["GET", "POST"], response_class=HTMLResponse)
+def unsubscribe(t: str = ""):
+    """The link in every Lyrpay email; POST is the one-click unsubscribe mail apps send."""
+    email = mail.read_unsubscribe_token(t)
+    if not email:
+        return HTMLResponse(UNSUBSCRIBED_PAGE.format(
+            heading="That link isn't valid", body="Reply to any Lyrpay email and we'll take you off the list."), 400)
+    ledger.opt_out(email)
+    return UNSUBSCRIBED_PAGE.format(
+        heading="You're unsubscribed", body="Lyrpay won't email you any more.")
 
 
 @app.get("/api/rates")
