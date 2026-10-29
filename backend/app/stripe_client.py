@@ -46,6 +46,9 @@ def _request(
         body = response.json()
     except (httpx.HTTPError, ValueError):
         raise StripeError("Stripe didn't answer in time.", definitive=False)
+    if response.status_code == 401:
+        global _key
+        _key = None  # rejected key: read the secret again next time, so a corrected one is picked up
     if response.status_code >= 400:
         message = body.get("error", {}).get("message", "Stripe declined the request.")
         raise StripeError(message, definitive=response.status_code < 500)
