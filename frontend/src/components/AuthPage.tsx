@@ -264,7 +264,7 @@ export default function AuthPage({ onSignedIn }: { onSignedIn: () => void }) {
         </section>
       </div>
       <div className="home-markets"><LiveMarkets home={currencyOf(country)} /></div>
-      <footer className="site-footer"><Logo size={22} /><span>© {new Date().getFullYear()} Lyrpay · Prices from CoinGecko and open.er-api.com</span></footer>
+      <footer className="site-footer"><Logo size={22} /><span>© {new Date().getFullYear()} Lyrpay · Powered by Lyrcloud</span></footer>
     </div>
   );
 }
