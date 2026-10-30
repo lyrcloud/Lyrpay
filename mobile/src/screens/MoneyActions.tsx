@@ -177,6 +177,7 @@ export function Withdraw({ balances, onStatement, onNotice, resumed, enabled }: 
 
   if (!enabled) return <Text style={styles.muted}>Bank withdrawals are being switched on. Check back soon.</Text>;
   if (!payouts) return error ?<Text style={styles.error}>{error}</Text> : <Text style={styles.muted}>Loading…</Text>;
+  if (payouts.status === 'unavailable') return <Text style={styles.muted}>Bank withdrawals are being switched on. Check back soon.</Text>;
   const testMode = payouts.test && (
     <Text style={styles.hint}>Test mode (Plaid sandbox): pick a test bank, user_good / pass_good. No real money is sent.</Text>
   );

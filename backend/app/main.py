@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import re
+import time
 from datetime import datetime, timedelta, timezone
 from decimal import ROUND_UP, Decimal
 
@@ -617,6 +618,17 @@ def link_bank(sub: str, profile: dict) -> dict | None:
     return plaid_bank(profile)
 
 
+# Until the Stripe account is signed up for Connect, Stripe refuses to make payout accounts. Each instance remembers
+# the refusal for a while and offers no bank setup meanwhile, then asks again so switching Connect on is picked up.
+CONNECT_OFF_FOR = 600
+_connect_off_until = 0.0
+CONNECT_OFF = "Bank withdrawals are being switched on. Check back soon."
+
+
+def connect_off() -> bool:
+    return time.monotonic() < _connect_off_until
+
+
 @app.get("/api/payouts")
 def payouts(user: User = Depends(current_user)):
     """Whether the person can withdraw yet, and in which currency."""
@@ -628,7 +640,7 @@ def payouts(user: User = Depends(current_user)):
     currency = stripe_call(stripe_client.platform)["currency"]
     account_id = profile.get("payoutAccount")
     if not account_id:
-        return {"status": "none", "currency": currency, "provider": "stripe"}
+        return {"status": "unavailable" if connect_off() else "none", "currency": currency, "provider": "stripe"}
     account = stripe_call(stripe_client.get_account, account_id)
     ready = account.get("payouts_enabled") and account.get("capabilities", {}).get("transfers") == "active"
     return {"status": "ready" if ready else "incomplete", "currency": currency, "provider": "stripe"}
@@ -652,9 +664,17 @@ def payouts_onboard(request: Request, body: Onboard | None = None, user: User = 
     if not account_id:
         if not profile.get("country"):
             raise ValueError("Choose your country first.")
-        account = stripe_call(
-            stripe_client.create_connected_account, user_sub=user.sub, email=user.email, country=profile["country"],
-        )
+        if connect_off():
+            raise HTTPException(status_code=503, detail=CONNECT_OFF)
+        try:
+            account = stripe_client.create_connected_account(user_sub=user.sub, email=user.email, country=profile["country"])
+        except stripe_client.StripeError as error:
+            if "signed up for Connect" not in str(error):
+                raise HTTPException(status_code=502, detail=str(error))
+            global _connect_off_until
+            _connect_off_until = time.monotonic() + CONNECT_OFF_FOR
+            logger.warning("Stripe Connect is off for this account: %s", error)
+            raise HTTPException(status_code=503, detail=CONNECT_OFF)
         account_id = account["id"]
         ledger.update_profile(user.sub, payoutAccount=account_id)
     return {"url": stripe_call(stripe_client.onboarding_link, account_id, site_origin(request))}

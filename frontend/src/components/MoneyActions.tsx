@@ -215,6 +215,7 @@ export function Withdraw({ balances, onStatement, onNotice, enabled }: Props & {
 
   if (!enabled) return <p className="empty">Bank withdrawals are being switched on. Check back soon.</p>;
   if (!payouts) return <p className="empty">Loading…</p>;
+  if (payouts.status === 'unavailable') return <p className="empty">Bank withdrawals are being switched on. Check back soon.</p>;
   const testMode = payouts.test && <p className="hint"><span className="badge soon">Test mode</span> Plaid sandbox: pick a test bank (user_good / pass_good). No real money is sent.</p>;
 
   if (payouts.status !== 'ready') {

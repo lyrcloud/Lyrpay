@@ -106,9 +106,9 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return body as T;
 }
 
-/** provider 'plaid': bank is the linked account's label and test is true for Plaid's sandbox (admins only) */
+/** unavailable: bank setup isn't switched on yet (Stripe Connect off). provider 'plaid': bank is the linked account's label and test is true for Plaid's sandbox (admins only) */
 export type Payouts = {
-  status: 'none' | 'incomplete' | 'ready'; currency: string; provider: 'plaid' | 'stripe'; bank?: string; test?: boolean;
+  status: 'none' | 'incomplete' | 'ready' | 'unavailable'; currency: string; provider: 'plaid' | 'stripe'; bank?: string; test?: boolean;
 };
 
 const post = <T>(path: string, body: unknown) => request<T>(path, { method: 'POST', body: JSON.stringify(body) });

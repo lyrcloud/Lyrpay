@@ -715,3 +715,22 @@ def test_production_plaid_is_for_everyone(as_user, plaid, monkeypatch):
     monkeypatch.setattr(plaid_client, "_keys", {"client_id": "c", "secret": "s", "env": "production"})
     payouts = as_user(ALICE).get("/api/payouts").json()
     assert payouts["provider"] == "plaid" and payouts["test"] is False
+
+
+def test_stripe_connect_off_is_explained_and_not_offered(as_user, payouts_ready, monkeypatch):
+    def refuse(**_):
+        raise stripe_client.StripeError(
+            "You can only create new accounts if you've signed up for Connect, which you can do at "
+            "https://dashboard.stripe.com/connect.", definitive=True)
+    monkeypatch.setattr(stripe_client, "create_connected_account", refuse)
+    monkeypatch.setattr(main, "_connect_off_until", 0.0)
+    client = as_user(ALICE)
+    client.patch("/api/me", json={"country": "US"})
+    assert client.get("/api/payouts").json()["status"] == "none"
+    response = client.post("/api/payouts/onboard")
+    assert response.status_code == 503 and response.json()["detail"] == main.CONNECT_OFF
+    assert client.get("/api/payouts").json()["status"] == "unavailable"
+    # Connect switched on later: asked again once the pause is over
+    monkeypatch.setattr(main, "_connect_off_until", 0.0)
+    monkeypatch.setattr(stripe_client, "create_connected_account", lambda **_: {"id": "acct_2"})
+    assert client.post("/api/payouts/onboard").json()["url"].endswith("acct_2")
