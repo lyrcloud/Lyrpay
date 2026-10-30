@@ -1,5 +1,6 @@
 import json
 import os
+import time
 from decimal import Decimal
 
 import boto3
@@ -8,7 +9,11 @@ import httpx
 SECRET_ID = os.getenv("PLAID_SECRET_ID", "lyrpay/plaid")
 HOSTS = {"sandbox": "https://sandbox.plaid.com", "production": "https://production.plaid.com"}
 
+# Warm instances live for hours, so the secret is read again every few minutes: a change reaches them without a redeploy
+KEYS_FOR = 300
+
 _keys: dict | None = None
+_keys_read = 0.0
 
 
 class PlaidError(RuntimeError):
@@ -22,8 +27,9 @@ class PlaidError(RuntimeError):
 def keys() -> dict | None:
     """client_id, secret and env ('sandbox' or 'production'): PLAID_* locally, else the lyrpay/plaid secret (JSON).
     None until one is set."""
-    global _keys
-    if _keys is None:
+    global _keys, _keys_read
+    if _keys is None or time.monotonic() - _keys_read > KEYS_FOR:
+        _keys_read = time.monotonic()
         if os.getenv("PLAID_CLIENT_ID"):
             _keys = {"client_id": os.environ["PLAID_CLIENT_ID"], "secret": os.getenv("PLAID_SECRET", ""),
                      "env": os.getenv("PLAID_ENV", "sandbox")}
@@ -31,7 +37,7 @@ def keys() -> dict | None:
             try:
                 _keys = json.loads(boto3.client("secretsmanager").get_secret_value(SecretId=SECRET_ID)["SecretString"])
             except Exception:
-                return None  # look again next time, so a secret added later is picked up
+                pass  # keep the keys already read; with none yet, look again next time
     return _keys if _keys and _keys.get("env") in HOSTS else None
 
 

@@ -734,3 +734,19 @@ def test_stripe_connect_off_is_explained_and_not_offered(as_user, payouts_ready,
     monkeypatch.setattr(main, "_connect_off_until", 0.0)
     monkeypatch.setattr(stripe_client, "create_connected_account", lambda **_: {"id": "acct_2"})
     assert client.post("/api/payouts/onboard").json()["url"].endswith("acct_2")
+
+
+def test_a_changed_plaid_secret_reaches_warm_instances(monkeypatch):
+    secret = {"value": '{"client_id": "c", "secret": "s", "env": "sandbox"}'}
+    class Secrets:
+        def get_secret_value(self, SecretId):
+            return {"SecretString": secret["value"]}
+    monkeypatch.setattr(plaid_client.boto3, "client", lambda service: Secrets())
+    monkeypatch.setattr(plaid_client, "_keys", None)
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(plaid_client.time, "monotonic", lambda: clock["now"])
+    assert plaid_client.env() == "sandbox"
+    secret["value"] = '{"client_id": "c", "secret": "live", "env": "production"}'
+    assert plaid_client.env() == "sandbox"  # read a moment ago
+    clock["now"] += plaid_client.KEYS_FOR + 1
+    assert plaid_client.env() == "production"
