@@ -295,7 +295,8 @@ def topup(body: TopUp, request: Request, user: User = Depends(current_user)):
         stripe_client.create_checkout,
         user_sub=user.sub, email=user.email, amount=amount, currency=currency, origin=site_origin(request), coupon=coupon,
     )
-    return {"url": session["url"]}
+    # The mobile app confirms the session itself: Checkout returns to the website, where it may not be signed in
+    return {"url": session["url"], "sessionId": session["id"]}
 
 
 @app.get("/api/coupons/check")

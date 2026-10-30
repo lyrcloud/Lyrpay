@@ -1,81 +1,39 @@
 import { StatusBar } from 'expo-status-bar';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, AppState, Pressable, RefreshControl, SafeAreaView, ScrollView, Text, View } from 'react-native';
+import { AddMoney, Convert, SendMoney, Withdraw } from './src/screens/MoneyActions';
+import SignIn from './src/screens/SignIn';
 import {
-  ActivityIndicator, Linking, Pressable, RefreshControl, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View,
-} from 'react-native';
-import { ApiError, Coin, SITE_URL, Statement, Transaction, fetchCrypto, fetchMe, sendMoney } from './src/services/api';
-import { isSignedIn, signIn, signOut } from './src/services/auth';
+  ApiError, Coin, Statement, TopUpResult, Transaction, confirmTopUps, fetchConfig, fetchCrypto, fetchMe,
+} from './src/services/api';
+import { isSignedIn, signOut } from './src/services/auth';
+import { Tabs, money, styles } from './src/ui';
 
 const KIND_LABEL: Record<Transaction['kind'], string> = {
   topup: 'Added money', send: 'Sent', receive: 'Received', convert: 'Converted', withdraw: 'Withdrew to bank',
+  giftcard: 'Gift card', redeem: 'Redeemed gift card', refund: 'Refund', bonus: 'Bonus', card: 'Card payment',
 };
 
-function money(amount: string | number, currency: string) {
-  try {
-    return new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(Number(amount));
-  } catch {
-    return `${amount} ${currency}`;
-  }
-}
+type Action = 'send' | 'add' | 'convert' | 'withdraw';
 
-function Button({ title, onPress, busy, secondary }: { title: string; onPress: () => void; busy?: boolean; secondary?: boolean }) {
-  return (
-    <Pressable style={[styles.button, secondary && styles.buttonSecondary]} onPress={onPress} disabled={busy}>
-      {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>{title}</Text>}
-    </Pressable>
-  );
-}
-
-function SignIn({ onSignedIn }: { onSignedIn: () => void }) {
-  const [login, setLogin] = useState('');
-  const [password, setPassword] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-
-  const submit = async () => {
-    setBusy(true);
-    setError('');
-    try {
-      await signIn(login, password);
-      onSignedIn();
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <ScrollView contentContainerStyle={styles.page} keyboardShouldPersistTaps="handled">
-      <Text style={styles.title}>Lyrpay</Text>
-      <Text style={styles.muted}>Sign in with your Lyr account, the same one you use for Lyrtrip.</Text>
-      <TextInput
-        style={styles.input} placeholder="Email or +mobile number" placeholderTextColor="#6b7394"
-        autoCapitalize="none" autoComplete="username" keyboardType="email-address" value={login} onChangeText={setLogin}
-      />
-      <TextInput
-        style={styles.input} placeholder="Password" placeholderTextColor="#6b7394"
-        secureTextEntry autoComplete="password" value={password} onChangeText={setPassword} onSubmitEditing={submit}
-      />
-      {!!error && <Text style={styles.error}>{error}</Text>}
-      <Button title="Sign in" onPress={submit} busy={busy} />
-      {/* Sign-up, Google and password resets run on the web, where the code and redirect flows live */}
-      <Button title="Create an account or sign in with Google" secondary onPress={() => Linking.openURL(SITE_URL)} />
-    </ScrollView>
-  );
+function topUpNotice({ amount, currency, bonus, couponNote, pending }: TopUpResult) {
+  if (pending) return `${money(amount, currency)} is on its way from your bank. It usually reaches your balance within 4 business days.`;
+  const extra = Number(bonus) > 0 ? ` plus a ${money(bonus, currency)} promo bonus 🎉` : couponNote ? ` (${couponNote})` : '';
+  return `${money(amount, currency)} added to your balance${extra}.`;
 }
 
 function Wallet({ onSignedOut }: { onSignedOut: () => void }) {
   const [name, setName] = useState('');
+  const [home, setHome] = useState('USD');
   const [statement, setStatement] = useState<Statement | null>(null);
   const [coins, setCoins] = useState<Coin[]>([]);
+  const [cardPayments, setCardPayments] = useState(false);
+  const [action, setAction] = useState<Action>('send');
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
-  const [to, setTo] = useState('');
-  const [amount, setAmount] = useState('');
-  const [currency, setCurrency] = useState('');
-  const [sending, setSending] = useState(false);
   const [notice, setNotice] = useState('');
+  // Counts returns to the app, so screens waiting on the browser (Stripe) check again
+  const [resumed, setResumed] = useState(0);
 
   const leave = useCallback(async () => {
     await signOut();
@@ -86,10 +44,14 @@ function Wallet({ onSignedOut }: { onSignedOut: () => void }) {
     setRefreshing(true);
     setError('');
     try {
+      // Top-ups paid in the browser are credited first, so the balances below include them
+      const topups = (await confirmTopUps()).filter(t => t.credited || t.pending);
+      if (topups.length) setNotice(topups.map(topUpNotice).join('\n'));
       const me = await fetchMe();
       setName(me.profile.name);
+      setHome(me.profile.currency || 'USD');
       setStatement(me);
-      setCurrency(current => current || Object.keys(me.balances)[0] || me.profile.currency);
+      fetchConfig().then(c => setCardPayments(c.cardPayments)).catch(() => {});
       setCoins((await fetchCrypto()).coins.slice(0, 10));
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) return leave();
@@ -103,27 +65,27 @@ function Wallet({ onSignedOut }: { onSignedOut: () => void }) {
     refresh();
   }, [refresh]);
 
-  const send = async () => {
-    setSending(true);
-    setError('');
-    setNotice('');
-    try {
-      const result = await sendMoney(to, amount, currency.toUpperCase(), '');
-      setStatement(result);
-      setNotice(`Sent ${money(amount, currency)} to ${result.sentTo || to}.`);
-      setTo('');
-      setAmount('');
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setSending(false);
-    }
-  };
+  // Back from Stripe Checkout or Stripe's bank-account setup in the browser
+  const appState = useRef(AppState.currentState);
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', next => {
+      if (appState.current.match(/inactive|background/) && next === 'active') {
+        refresh();
+        setResumed(n => n + 1);
+      }
+      appState.current = next;
+    });
+    return () => subscription.remove();
+  }, [refresh]);
 
-  const balances = Object.entries(statement?.balances ?? {});
+  const balances = statement?.balances ?? {};
+  const shared = { balances, home, onStatement: setStatement, onNotice: setNotice };
 
   return (
-    <ScrollView contentContainerStyle={styles.page} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} />}>
+    <ScrollView
+      contentContainerStyle={styles.page} keyboardShouldPersistTaps="handled"
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} />}
+    >
       <View style={styles.header}>
         <Text style={styles.title}>Lyrpay</Text>
         <Pressable onPress={leave}><Text style={styles.link}>Sign out</Text></Pressable>
@@ -135,31 +97,22 @@ function Wallet({ onSignedOut }: { onSignedOut: () => void }) {
       <View style={styles.card}>
         <Text style={styles.heading}>Balances</Text>
         {!statement && <ActivityIndicator color="#7b7bff" />}
-        {statement && !balances.length && <Text style={styles.muted}>No money yet. Add some on the web.</Text>}
-        {balances.map(([code, value]) => (
+        {statement && !Object.keys(balances).length && <Text style={styles.muted}>No money yet. Add some below.</Text>}
+        {Object.entries(balances).map(([code, value]) => (
           <View key={code} style={styles.row}><Text style={styles.text}>{code}</Text><Text style={styles.strong}>{money(value, code)}</Text></View>
         ))}
-        <Button title="Add money or withdraw" secondary onPress={() => Linking.openURL(SITE_URL)} />
       </View>
 
-      {!!balances.length && (
+      {statement && (
         <View style={styles.card}>
-          <Text style={styles.heading}>Send</Text>
-          <TextInput
-            style={styles.input} placeholder="Their email or +mobile number" placeholderTextColor="#6b7394"
-            autoCapitalize="none" value={to} onChangeText={setTo}
+          <Tabs
+            value={action} onChange={setAction}
+            options={[['send', 'Send'], ['add', 'Add'], ['convert', 'Convert'], ['withdraw', 'Withdraw']]}
           />
-          <View style={styles.row}>
-            <TextInput
-              style={[styles.input, styles.grow]} placeholder="0.00" placeholderTextColor="#6b7394"
-              keyboardType="decimal-pad" value={amount} onChangeText={setAmount}
-            />
-            <TextInput
-              style={[styles.input, styles.code]} autoCapitalize="characters" maxLength={3}
-              value={currency} onChangeText={setCurrency} accessibilityLabel="Currency"
-            />
-          </View>
-          <Button title="Send now" onPress={send} busy={sending} />
+          {action === 'send' && <SendMoney {...shared} />}
+          {action === 'add' && <AddMoney {...shared} cardPayments={cardPayments} />}
+          {action === 'convert' && <Convert {...shared} />}
+          {action === 'withdraw' && <Withdraw {...shared} resumed={resumed} enabled={cardPayments} />}
         </View>
       )}
 
@@ -169,7 +122,7 @@ function Wallet({ onSignedOut }: { onSignedOut: () => void }) {
         {statement?.transactions.slice(0, 20).map(tx => (
           <View key={tx.id} style={styles.row}>
             <Text style={[styles.text, styles.grow]} numberOfLines={1}>
-              {KIND_LABEL[tx.kind]}{tx.counterparty && tx.kind !== 'topup' ? ` · ${tx.counterparty}` : ''}
+              {KIND_LABEL[tx.kind] ?? tx.kind}{tx.counterparty && tx.kind !== 'topup' ? ` · ${tx.counterparty}` : ''}
               {tx.status === 'pending' ? ' · Processing' : tx.status === 'failed' ? ' · Failed' : ''}
             </Text>
             <Text style={tx.amount.startsWith('-') ? styles.text : styles.positive}>
@@ -215,30 +168,3 @@ export default function App() {
     </SafeAreaView>
   );
 }
-
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0b1020' },
-  page: { padding: 20, gap: 12 },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 12 },
-  title: { fontSize: 28, fontWeight: '700', color: '#eef0fa' },
-  card: { backgroundColor: '#131a2e', borderRadius: 14, padding: 16, gap: 8 },
-  heading: { fontSize: 16, color: '#7b7bff', marginBottom: 4 },
-  row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8, paddingVertical: 3 },
-  grow: { flex: 1 },
-  code: { width: 80, textAlign: 'center' },
-  text: { color: '#eef0fa' },
-  strong: { color: '#eef0fa', fontWeight: '700' },
-  muted: { color: '#9aa1c0' },
-  positive: { color: '#3ccf91' },
-  negative: { color: '#ff7a7a' },
-  error: { color: '#ff7a7a' },
-  notice: { color: '#eef0fa', backgroundColor: '#1e2550', padding: 10, borderRadius: 10 },
-  link: { color: '#7b7bff', fontWeight: '600' },
-  input: {
-    color: '#eef0fa', backgroundColor: '#1b2340', borderColor: '#252e4d', borderWidth: 1, borderRadius: 10,
-    paddingHorizontal: 12, paddingVertical: 10,
-  },
-  button: { backgroundColor: '#5b5bf6', borderRadius: 10, paddingVertical: 12, alignItems: 'center' },
-  buttonSecondary: { backgroundColor: '#252e4d' },
-  buttonText: { color: '#fff', fontWeight: '600' },
-});

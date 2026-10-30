@@ -33,8 +33,9 @@ frontend/   React + Vite dashboard; lib/auth.ts is the Cognito helper (same flow
 template.yaml  DynamoDB ledger, API Lambda + Function URL, Lyrpay's app client in the Lyr account pool,
                S3 + CloudFront (serves /api/* from the Lambda, so the site and API share an origin)
 deploy.sh   builds and deploys all of it
-mobile/     Expo 50 app: sign in with a Lyr account (email or mobile number), balances, sending, activity,
-            crypto prices; sign-up, Google, top-ups and withdrawals open the web dashboard
+mobile/     Expo 50 app: sign in, sign up and reset passwords with a Lyr account (email or mobile number), balances,
+            sending, top-ups (Stripe Checkout in the browser, confirmed by the app when it's back in front),
+            converting, withdrawals, activity, crypto prices; Google sign-in opens the web dashboard
 ```
 
 ## Deploy
