@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import time
 from decimal import Decimal
@@ -14,6 +15,15 @@ KEYS_FOR = 300
 
 _keys: dict | None = None
 _keys_read = 0.0
+# Keys Plaid said are wrong (production keys that aren't approved, a sandbox secret marked production): left unused,
+# so people see "not switched on" instead of Plaid's error, until the secret holds different ones
+_rejected: tuple | None = None
+
+logger = logging.getLogger("lyrpay")
+
+
+def _fingerprint(found: dict) -> tuple:
+    return found.get("client_id"), found.get("secret"), found.get("env")
 
 
 class PlaidError(RuntimeError):
@@ -38,7 +48,9 @@ def keys() -> dict | None:
                 _keys = json.loads(boto3.client("secretsmanager").get_secret_value(SecretId=SECRET_ID)["SecretString"])
             except Exception:
                 pass  # keep the keys already read; with none yet, look again next time
-    return _keys if _keys and _keys.get("env") in HOSTS else None
+    if not _keys or _keys.get("env") not in HOSTS or _fingerprint(_keys) == _rejected:
+        return None
+    return _keys
 
 
 def env() -> str | None:
@@ -58,8 +70,10 @@ def _request(path: str, body: dict) -> dict:
     except (httpx.HTTPError, ValueError):
         raise PlaidError("Plaid didn't answer in time.", definitive=False)
     if response.status_code == 400 and data.get("error_code") == "INVALID_API_KEYS":
-        global _keys
-        _keys = None  # rejected keys: read the secret again next time, so corrected ones are picked up
+        global _rejected
+        _rejected = _fingerprint(found)
+        logger.error("Plaid rejected the %s keys in %s: %s", found.get("env"), SECRET_ID, data.get("error_message"))
+        raise PlaidError("Bank payouts aren't switched on yet.", definitive=True)
     if response.status_code >= 400:
         message = data.get("display_message") or data.get("error_message") or "Plaid declined the request."
         raise PlaidError(message, definitive=response.status_code < 500)

@@ -750,3 +750,26 @@ def test_a_changed_plaid_secret_reaches_warm_instances(monkeypatch):
     assert plaid_client.env() == "sandbox"  # read a moment ago
     clock["now"] += plaid_client.KEYS_FOR + 1
     assert plaid_client.env() == "production"
+
+
+def test_rejected_plaid_keys_are_set_aside_until_the_secret_changes(as_user, payouts_ready, monkeypatch):
+    monkeypatch.setattr(plaid_client, "_keys", {"client_id": "c", "secret": "sandbox-secret", "env": "production"})
+    monkeypatch.setattr(plaid_client, "_keys_read", 10**9)
+    monkeypatch.setattr(plaid_client, "_rejected", None)
+    monkeypatch.setattr(plaid_client.time, "monotonic", lambda: 10**9)
+
+    class Rejected:
+        status_code = 400
+        def json(self):
+            return {"error_code": "INVALID_API_KEYS", "error_message": "invalid client_id or secret provided"}
+    monkeypatch.setattr(plaid_client.httpx, "post", lambda *a, **k: Rejected())
+    client = as_user(ALICE)
+    client.patch("/api/me", json={"country": "US"})
+    assert client.get("/api/payouts").json()["provider"] == "plaid"
+    response = client.post("/api/payouts/onboard", json={})
+    assert response.status_code == 502 and response.json()["detail"] == "Bank payouts aren't switched on yet."
+    # Set aside: back on Stripe, with no Plaid error
+    assert client.get("/api/payouts").json()["provider"] == "stripe"
+    # Different keys saved: used again
+    monkeypatch.setattr(plaid_client, "_keys", {"client_id": "c", "secret": "production-secret", "env": "production"})
+    assert client.get("/api/payouts").json()["provider"] == "plaid"
