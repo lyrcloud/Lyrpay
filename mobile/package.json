@@ -9,9 +9,9 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "typecheck": "tsc --noEmit",
-    "build:preview": "eas build --profile preview --platform android",
-    "build": "eas build --profile production --platform all",
-    "submit": "eas submit --profile production --platform all"
+    "build:preview": "npx --yes eas-cli build --profile preview --platform android",
+    "build": "npx --yes eas-cli build --profile production --platform all",
+    "submit": "npx --yes eas-cli submit --profile production --platform all"
   },
   "dependencies": {
     "expo": "~50.0.21",
