@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { api, type Statement } from '../lib/api';
+import { api, type Payouts, type Statement } from '../lib/api';
 import { currencyName, formatMoney } from '../lib/format';
 
 type Props = {
@@ -187,7 +187,7 @@ export function Convert({ currencies, balances, home, onStatement, onNotice }: P
 }
 
 export function Withdraw({ balances, onStatement, onNotice, enabled }: Props & { enabled: boolean }) {
-  const [payouts, setPayouts] = useState<{ status: 'none' | 'incomplete' | 'ready'; currency: string } | null>(null);
+  const [payouts, setPayouts] = useState<Payouts | null>(null);
   const [amount, setAmount] = useState('');
   const { busy, error, run } = useAction();
 
@@ -199,29 +199,38 @@ export function Withdraw({ balances, onStatement, onNotice, enabled }: Props & {
     location.href = (await api.onboardPayouts()).url;
   });
 
+  const plaid = payouts?.provider === 'plaid';
+
   const submit = run(async () => {
     const result = await api.withdraw(amount);
     onStatement(result);
+    const sum = formatMoney(result.withdrawn, result.currency);
     onNotice(result.status === 'paid'
-      ? `${formatMoney(result.withdrawn, result.currency)} is on its way to your bank.`
-      : `Your ${formatMoney(result.withdrawn, result.currency)} withdrawal is processing. We'll finish it shortly; it won't be sent twice.`);
+      ? `${sum} is on its way to your bank.`
+      : plaid
+        ? `${sum} is on its way to your bank. It usually arrives in 1–2 business days.`
+        : `Your ${sum} withdrawal is processing. We'll finish it shortly; it won't be sent twice.`);
     setAmount('');
   });
 
   if (!enabled) return <p className="empty">Bank withdrawals are being switched on. Check back soon.</p>;
   if (!payouts) return <p className="empty">Loading…</p>;
+  const testMode = payouts.test && <p className="hint"><span className="badge soon">Test mode</span> Plaid sandbox: pick a test bank (user_good / pass_good). No real money is sent.</p>;
 
   if (payouts.status !== 'ready') {
     return (
       <form className="form" onSubmit={setUp}>
+        {testMode}
         <p className="hint">
-          {payouts.status === 'none'
-            ? 'To withdraw, add your bank account. Stripe checks your identity and keeps your bank details; Lyrpay never sees them.'
-            : 'Stripe still needs a few details before you can withdraw.'}
+          {plaid
+            ? 'To withdraw, add your US bank account. Plaid connects it securely; Lyrpay never sees your bank sign-in.'
+            : payouts.status === 'none'
+              ? 'To withdraw, add your bank account. Stripe checks your identity and keeps your bank details; Lyrpay never sees them.'
+              : 'Stripe still needs a few details before you can withdraw.'}
         </p>
         {error && <p className="error" role="alert">{error}</p>}
         <button className="button primary" disabled={busy}>
-          {busy ? 'Opening Stripe…' : payouts.status === 'none' ? 'Add bank account' : 'Finish setup'}
+          {busy ? `Opening ${plaid ? 'Plaid' : 'Stripe'}…` : payouts.status === 'incomplete' ? 'Finish setup' : 'Add bank account'}
         </button>
       </form>
     );
@@ -230,13 +239,16 @@ export function Withdraw({ balances, onStatement, onNotice, enabled }: Props & {
   const { currency } = payouts;
   return (
     <form className="form" onSubmit={submit}>
+      {testMode}
       <div className="amount-row">
         <input inputMode="decimal" placeholder="0.00" required value={amount} onChange={e => setAmount(e.target.value)} aria-label="Amount" />
         <select value={currency} disabled aria-label="Currency"><option>{currency} · {currencyName(currency)}</option></select>
       </div>
       <p className="hint">
         Available: {formatMoney(balances[currency] ?? 0, currency)}. Withdrawals are paid in {currency}; convert other
-        currencies first. Stripe pays out to your bank in about 2 business days.
+        currencies first. {plaid
+          ? `Sent to ${payouts.bank} by bank transfer (ACH) in 1–2 business days.`
+          : 'Stripe pays out to your bank in about 2 business days.'}
       </p>
       {error && <p className="error" role="alert">{error}</p>}
       <button className="button primary" disabled={busy}>{busy ? 'Withdrawing…' : 'Withdraw'}</button>

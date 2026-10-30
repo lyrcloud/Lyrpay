@@ -23,7 +23,8 @@ from app.auth import User
 #   COUPON#<code>         COUPON  a promo code made by the admin; COUPON#<code> USED#<sub> marks a person's one use
 #   REF#<code>            REF     sub, so a referral link finds who shared it
 #   SETTINGS              REWARDS referral bonuses and the business conversion fee, set by the admin
-# A profile can also carry referralCode, referredBy (sub), referralRewarded, and business (an application and its review).
+# A profile can also carry referralCode, referredBy (sub), referralRewarded, and business (an application and its review),
+# payoutAccount (Stripe Connect) or bank (Plaid: access token, account id, label, env) with bankLink (a Link in progress).
 # Pending withdrawals and bank top-ups also carry queue="withdraw" or queue="topup", which puts them (and only them)
 # in the sparse "pending" index, so the scheduled sweep finds them without scanning the table.
 TABLE_NAME = os.getenv("LEDGER_TABLE", "lyrpay-ledger")
@@ -259,9 +260,9 @@ def bulk_transfer(sender_sub: str, sender_name: str, currency: str, payments: li
     _transact(items, InsufficientFunds())
 
 
-def start_withdrawal(sub: str, currency: str, amount: Decimal) -> dict:
-    """Take the amount off the balance before Stripe moves it, so it can't be spent twice meanwhile."""
-    tx = _tx_item(sub, "withdraw", currency, -amount, counterparty="Bank account", status="pending", queue="withdraw")
+def start_withdrawal(sub: str, currency: str, amount: Decimal, rail: str = "", counterparty: str = "Bank account") -> dict:
+    """Take the amount off the balance before Stripe or Plaid (rail="plaid") moves it, so it can't be spent twice meanwhile."""
+    tx = _tx_item(sub, "withdraw", currency, -amount, counterparty=counterparty, status="pending", queue="withdraw", rail=rail)
     _transact([_debit(sub, currency, amount), _put(tx)], InsufficientFunds())
     return tx
 
@@ -281,6 +282,15 @@ def finish_withdrawal(tx: dict, transfer_id: str):
             raise
 
 
+def note_transfer(tx: dict, transfer_id: str):
+    """Record the bank transfer made for a withdrawal that is still on its way."""
+    table().update_item(
+        Key={"pk": tx["pk"], "sk": tx["sk"]}, UpdateExpression="SET #r = :r",
+        ExpressionAttributeNames={"#r": "reference"}, ExpressionAttributeValues={":r": transfer_id},
+    )
+    tx["reference"] = transfer_id
+
+
 def _settle(pk: str, sk: str, status: str) -> dict:
     """Take a pending line off the queue with its outcome, only if it is still pending."""
     return {"Update": {
@@ -293,7 +303,7 @@ def _settle(pk: str, sk: str, status: str) -> dict:
 
 
 def fail_withdrawal(tx: dict):
-    """Stripe refused the transfer: put the money back on the balance."""
+    """The transfer was refused or returned: put the money back on the balance."""
     sub = tx["pk"].removeprefix("USER#")
     _transact([_credit(sub, tx["currency"], -tx["amount"]), _settle(tx["pk"], tx["sk"], "failed")], AlreadyApplied())
 

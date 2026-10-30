@@ -147,7 +147,7 @@ export function Convert({ balances, home, onStatement, onNotice }: Props) {
   );
 }
 
-/** `resumed` changes each time the app comes back to the front, e.g. from Stripe's bank-account setup. */
+/** `resumed` changes each time the app comes back to the front, e.g. from adding a bank account with Plaid or Stripe. */
 export function Withdraw({ balances, onStatement, onNotice, resumed, enabled }: Props & { resumed: number; enabled: boolean }) {
   const [payouts, setPayouts] = useState<Payouts | null>(null);
   const [amount, setAmount] = useState('');
@@ -161,28 +161,39 @@ export function Withdraw({ balances, onStatement, onNotice, resumed, enabled }: 
     await Linking.openURL((await onboardPayouts()).url);
   });
 
+  const plaid = payouts?.provider === 'plaid';
+
   const submit = run(async () => {
     const result = await withdraw(amount);
     onStatement(result);
+    const sum = money(result.withdrawn, result.currency);
     onNotice(result.status === 'paid'
-      ? `${money(result.withdrawn, result.currency)} is on its way to your bank.`
-      : `Your ${money(result.withdrawn, result.currency)} withdrawal is processing. We'll finish it shortly; it won't be sent twice.`);
+      ? `${sum} is on its way to your bank.`
+      : plaid
+        ? `${sum} is on its way to your bank. It usually arrives in 1–2 business days.`
+        : `Your ${sum} withdrawal is processing. We'll finish it shortly; it won't be sent twice.`);
     setAmount('');
   });
 
   if (!enabled) return <Text style={styles.muted}>Bank withdrawals are being switched on. Check back soon.</Text>;
   if (!payouts) return error ?<Text style={styles.error}>{error}</Text> : <Text style={styles.muted}>Loading…</Text>;
+  const testMode = payouts.test && (
+    <Text style={styles.hint}>Test mode (Plaid sandbox): pick a test bank, user_good / pass_good. No real money is sent.</Text>
+  );
 
   if (payouts.status !== 'ready') {
     return (
       <>
+        {testMode}
         <Text style={styles.hint}>
-          {payouts.status === 'none'
-            ? 'To withdraw, add your bank account. Stripe checks your identity and keeps your bank details; Lyrpay never sees them.'
-            : 'Stripe still needs a few details before you can withdraw.'}
+          {plaid
+            ? 'To withdraw, add your US bank account. Plaid connects it securely; Lyrpay never sees your bank sign-in. When Plaid says you are done, come back to Lyrpay.'
+            : payouts.status === 'none'
+              ? 'To withdraw, add your bank account. Stripe checks your identity and keeps your bank details; Lyrpay never sees them.'
+              : 'Stripe still needs a few details before you can withdraw.'}
         </Text>
         {!!error && <Text style={styles.error}>{error}</Text>}
-        <Button title={payouts.status === 'none' ? 'Add bank account' : 'Finish setup'} onPress={setUp} busy={busy} />
+        <Button title={payouts.status === 'incomplete' ? 'Finish setup' : 'Add bank account'} onPress={setUp} busy={busy} />
       </>
     );
   }
@@ -190,10 +201,12 @@ export function Withdraw({ balances, onStatement, onNotice, resumed, enabled }: 
   const { currency } = payouts;
   return (
     <>
+      {testMode}
       <AmountField amount={amount} onAmount={setAmount} currency={currency} currencyLocked />
       <Text style={styles.hint}>
-        {available(balances, currency)}. Withdrawals are paid in {currency}; convert other currencies first. Stripe pays
-        out to your bank in about 2 business days.
+        {available(balances, currency)}. Withdrawals are paid in {currency}; convert other currencies first. {plaid
+          ? `Sent to ${payouts.bank} by bank transfer (ACH) in 1–2 business days.`
+          : 'Stripe pays out to your bank in about 2 business days.'}
       </Text>
       {!!error && <Text style={styles.error}>{error}</Text>}
       <Button title="Withdraw" onPress={submit} busy={busy} />

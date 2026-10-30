@@ -18,7 +18,10 @@ export type Transaction = {
 
 export type Statement = { balances: Record<string, string>; transactions: Transaction[] };
 
-export type Payouts = { status: 'none' | 'incomplete' | 'ready'; currency: string };
+/** provider 'plaid': bank is the linked account's label and test is true for Plaid's sandbox (admins only) */
+export type Payouts = {
+  status: 'none' | 'incomplete' | 'ready'; currency: string; provider: 'plaid' | 'stripe'; bank?: string; test?: boolean;
+};
 
 export type TopUpResult = { credited: boolean; pending?: boolean; amount: string; currency: string; bonus: string; couponNote: string } & Statement;
 
@@ -70,7 +73,8 @@ export const convert = (source: string, target: string, amount: string) =>
 
 export const fetchPayouts = () => request<Payouts>('/payouts');
 
-export const onboardPayouts = () => post<{ url: string }>('/payouts/onboard', {});
+// app: Plaid ends on its own done screen rather than sending the person to the website
+export const onboardPayouts = () => post<{ url: string }>('/payouts/onboard', { app: true });
 
 export const withdraw = (amount: string) =>
   post<{ withdrawn: string; currency: string; status: 'paid' | 'pending' } & Statement>('/withdraw', { amount });

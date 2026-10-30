@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
-from app import cards, ledger, mail, rates, rewards, stripe_client
+from app import cards, ledger, mail, plaid_client, rates, rewards, stripe_client
 from app.auth import User, current_user
 from app.money import exponent, from_minor, parse_amount, quantize
 
@@ -206,7 +206,7 @@ def admin_overview(days: int = 14, _: User = Depends(admin_user)):
             {
                 "name": p.get("name", ""), "email": p.get("email", ""), "phone": p.get("phone", ""),
                 "country": p.get("country", ""), "currency": p.get("currency", ""), "created": p.get("created", ""),
-                "heldUsd": round(held_by_user.get(p["pk"], 0.0), 2), "payouts": bool(p.get("payoutAccount")),
+                "heldUsd": round(held_by_user.get(p["pk"], 0.0), 2), "payouts": bool(p.get("payoutAccount") or p.get("bank")),
                 "business": (p.get("business") or {}).get("status", ""), "referred": bool(p.get("referredBy")),
             }
             for p in users
@@ -473,9 +473,34 @@ def stripe_call(call, *args, **kwargs):
         raise HTTPException(status_code=502, detail=str(error))
 
 
-def send_withdrawal(tx: dict, account_id: str) -> str:
-    """Make sure Stripe has the transfer for a pending withdrawal and record the outcome:
-    'paid', 'failed' (balance restored) or 'pending' (Stripe's answer is still unknown)."""
+def plaid_payouts(email: str) -> bool:
+    """Bank payouts go through Plaid once its keys are set. Sandbox keys only for admins, who test with Plaid's
+    pretend banks: nobody else's real balance is ever sent to one."""
+    current = plaid_client.env()
+    return current == "production" or (current == "sandbox" and bool(email) and email in ADMIN_EMAILS)
+
+
+def plaid_bank(profile: dict) -> dict | None:
+    """The bank account the person linked through Plaid, if it belongs to the Plaid environment in use."""
+    bank = profile.get("bank")
+    return bank if bank and bank.get("env") == plaid_client.env() else None
+
+
+def plaid_call(call, *args, **kwargs):
+    try:
+        return call(*args, **kwargs)
+    except plaid_client.PlaidError as error:
+        raise HTTPException(status_code=502, detail=str(error))
+
+
+def send_withdrawal(tx: dict, profile: dict) -> str:
+    """Make sure the transfer for a pending withdrawal exists and record the outcome:
+    'paid', 'failed' (balance restored) or 'pending' (the answer is still unknown, or the bank hasn't got it yet)."""
+    if tx.get("rail") == "plaid":
+        return send_plaid_withdrawal(tx, profile)
+    account_id = profile.get("payoutAccount")
+    if not account_id:
+        return "pending"
     try:
         transfer = stripe_client.find_transfer(account_id, tx["id"]) or stripe_client.transfer_to(
             account_id, -tx["amount"], tx["currency"], tx["id"],
@@ -489,13 +514,41 @@ def send_withdrawal(tx: dict, account_id: str) -> str:
     return "paid"
 
 
+def send_plaid_withdrawal(tx: dict, profile: dict) -> str:
+    """Plaid sends the ACH credit; the line stays pending until Plaid posts it to the bank network."""
+    bank = plaid_bank(profile)
+    if not bank and not tx.get("reference"):
+        logger.warning("Withdrawal %s: the Plaid bank account is gone", tx["id"])
+        return "pending"
+    try:
+        if tx.get("reference"):
+            transfer = plaid_client.get_transfer(tx["reference"])
+        else:
+            transfer = plaid_client.pay_out(bank["access"], bank["account"], -tx["amount"], profile.get("name", ""), tx["id"])
+            # From now on only its status is asked for, never a second payout
+            ledger.note_transfer(tx, transfer["id"])
+    except plaid_client.PlaidError as error:
+        # A transfer Plaid already has is never written off on an error; only one Plaid refused to make
+        if not error.definitive or tx.get("reference"):
+            logger.warning("Withdrawal %s: %s", tx["id"], error)
+            return "pending"
+        logger.warning("Withdrawal %s refused by Plaid: %s", tx["id"], error)
+        ledger.fail_withdrawal(tx)
+        return "failed"
+    if transfer["status"] in ("failed", "cancelled", "returned"):
+        ledger.fail_withdrawal(tx)
+        return "failed"
+    if transfer["status"] in ("posted", "settled", "funds_available"):
+        ledger.finish_withdrawal(tx, transfer["id"])
+        return "paid"
+    return "pending"
+
+
 def settle_withdrawals(sub: str, profile: dict):
-    """Finish withdrawals left pending when Stripe didn't answer, each time the person opens their wallet."""
-    if not profile.get("payoutAccount"):
-        return
+    """Finish withdrawals still pending, each time the person opens their wallet."""
     for tx in ledger.pending(sub, "withdraw"):
         try:
-            send_withdrawal(tx, profile["payoutAccount"])
+            send_withdrawal(tx, profile)
         except Exception:
             logger.exception("Settling withdrawal %s failed", tx["id"])
 
@@ -545,30 +598,56 @@ def sweep(queue: str, settle) -> dict:
 
 
 def sweep_withdrawals() -> dict:
-    return sweep("withdraw", lambda tx: send_withdrawal(tx, (ledger.get_item(tx["pk"], "PROFILE") or {})["payoutAccount"]))
+    return sweep("withdraw", lambda tx: send_withdrawal(tx, ledger.get_item(tx["pk"], "PROFILE") or {}))
 
 
 def sweep_topups() -> dict:
     return sweep("topup", check_topup)
 
 
+def link_bank(sub: str, profile: dict) -> dict | None:
+    """Save the bank account picked on the person's Plaid page once they've finished there."""
+    link_token = profile.get("bankLink")
+    if link_token:
+        account = plaid_call(plaid_client.linked_account, link_token)
+        if account:
+            access = plaid_call(plaid_client.exchange, account["public_token"])
+            bank = {"access": access, "account": account["account_id"], "label": account["label"], "env": plaid_client.env()}
+            profile = ledger.update_profile(sub, bank=bank, bankLink="")
+    return plaid_bank(profile)
+
+
 @app.get("/api/payouts")
 def payouts(user: User = Depends(current_user)):
     """Whether the person can withdraw yet, and in which currency."""
     profile = ledger.ensure_profile(user)
+    if plaid_payouts(user.email):
+        bank = link_bank(user.sub, profile)
+        return {"status": "ready" if bank else "none", "currency": "USD", "provider": "plaid",
+                "bank": bank["label"] if bank else "", "test": plaid_client.env() == "sandbox"}
     currency = stripe_call(stripe_client.platform)["currency"]
     account_id = profile.get("payoutAccount")
     if not account_id:
-        return {"status": "none", "currency": currency}
+        return {"status": "none", "currency": currency, "provider": "stripe"}
     account = stripe_call(stripe_client.get_account, account_id)
     ready = account.get("payouts_enabled") and account.get("capabilities", {}).get("transfers") == "active"
-    return {"status": "ready" if ready else "incomplete", "currency": currency}
+    return {"status": "ready" if ready else "incomplete", "currency": currency, "provider": "stripe"}
+
+
+class Onboard(BaseModel):
+    # The mobile app: Plaid ends on its own done screen and the person switches back, instead of landing on the website
+    app: bool = False
 
 
 @app.post("/api/payouts/onboard")
-def payouts_onboard(request: Request, user: User = Depends(current_user)):
-    """A Stripe link where the person adds their identity and bank details."""
+def payouts_onboard(request: Request, body: Onboard | None = None, user: User = Depends(current_user)):
+    """A page where the person adds their bank account: Plaid's, or Stripe's (which also checks their identity)."""
     profile = ledger.ensure_profile(user)
+    if plaid_payouts(user.email):
+        redirect = None if body and body.app else f"{site_origin(request)}/?payouts=done"
+        link = plaid_call(plaid_client.hosted_link, user.sub, redirect)
+        ledger.update_profile(user.sub, bankLink=link["link_token"])
+        return {"url": link["hosted_link_url"]}
     account_id = profile.get("payoutAccount")
     if not account_id:
         if not profile.get("country"):
@@ -588,21 +667,27 @@ class Withdraw(BaseModel):
 @app.post("/api/withdraw")
 def withdraw(body: Withdraw, user: User = Depends(current_user)):
     profile = ledger.ensure_profile(user)
-    account_id = profile.get("payoutAccount")
-    if not account_id:
-        raise HTTPException(status_code=409, detail="Set up bank payouts first.")
-    account = stripe_call(stripe_client.get_account, account_id)
-    if not account.get("payouts_enabled"):
-        raise HTTPException(status_code=409, detail="Finish setting up bank payouts first.")
-    currency = stripe_call(stripe_client.platform)["currency"]
+    if plaid_payouts(user.email):
+        bank = plaid_bank(profile)
+        if not bank:
+            raise HTTPException(status_code=409, detail="Add your bank account first.")
+        currency, details = "USD", {"rail": "plaid", "counterparty": bank["label"]}
+    else:
+        account_id = profile.get("payoutAccount")
+        if not account_id:
+            raise HTTPException(status_code=409, detail="Set up bank payouts first.")
+        account = stripe_call(stripe_client.get_account, account_id)
+        if not account.get("payouts_enabled"):
+            raise HTTPException(status_code=409, detail="Finish setting up bank payouts first.")
+        currency, details = stripe_call(stripe_client.platform)["currency"], {}
     amount = parse_amount(body.amount, currency)
     try:
-        tx = ledger.start_withdrawal(user.sub, currency, amount)
+        tx = ledger.start_withdrawal(user.sub, currency, amount, **details)
     except ledger.InsufficientFunds:
         raise HTTPException(status_code=409, detail=f"You don't have enough {currency}. Convert to {currency} first.")
-    outcome = send_withdrawal(tx, account_id)
+    outcome = send_withdrawal(tx, profile)
     if outcome == "failed":
-        raise HTTPException(status_code=502, detail="Stripe refused the withdrawal, so nothing left your balance.")
+        raise HTTPException(status_code=502, detail="The bank transfer was refused, so nothing left your balance.")
     return {"withdrawn": money(amount, currency), "currency": currency, "status": outcome, **statement(user.sub)}
 
 

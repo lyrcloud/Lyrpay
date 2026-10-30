@@ -96,6 +96,20 @@ aws secretsmanager create-secret --name lyrpay/stripe --secret-string 'sk_live_o
 
 Warm Lambdas cache the key, so update the function or wait a few minutes before checking that `/api/config` shows `"cardPayments": true`.
 
+### Bank withdrawals through Plaid
+
+With Plaid keys saved, withdrawals go to a US bank account the person links on Plaid's Hosted Link page, and Plaid Transfer
+sends the money by ACH (USD only). Without them, withdrawals use Stripe Connect.
+
+```bash
+aws secretsmanager create-secret --name lyrpay/plaid \
+  --secret-string '{"client_id":"...","secret":"...","env":"sandbox"}'
+```
+
+With `"env":"sandbox"` only admins (`ADMIN_EMAILS`) see Plaid, with Plaid's test banks (user_good / pass_good), and
+everyone else keeps Stripe. Withdrawals stay pending until Plaid posts them, and a refused or returned transfer
+puts the money back. Switch to production keys and `"env":"production"` once Plaid approves Transfer.
+
 ### Point lyrpay.com here
 
 lyrpay.com's DNS is on Cloudflare. Request an ACM certificate in us-east-1 for `lyrpay.com` and `www.lyrpay.com`, add its validation CNAMEs in Cloudflare, add the domains as CloudFront aliases, CNAME them to the distribution, then:

@@ -71,12 +71,12 @@ export default function Dashboard({ onSignedOut }: { onSignedOut: () => void }) 
     // Back from Stripe Checkout
     const params = new URLSearchParams(location.search);
     const topup = params.get('topup');
-    // Back from Stripe's bank-account setup
+    // Back from adding a bank account (Plaid or Stripe)
     const payouts = params.get('payouts');
     if (payouts) {
       history.replaceState(null, '', '/');
       setAction('withdraw');
-      if (payouts === 'done') setNotice('Bank details saved with Stripe.');
+      if (payouts === 'done') setNotice('Bank account added.');
     }
     if (topup) {
       history.replaceState(null, '', '/');

@@ -10,7 +10,7 @@ os.environ.setdefault("AWS_DEFAULT_REGION", "us-east-1")
 os.environ.setdefault("STRIPE_SECRET_KEY", "sk_test_dummy")
 os.environ.setdefault("MAIL_SIGNING_KEY", "test-signing-key")
 
-from app import ledger, mail, main, rates, stripe_client  # noqa: E402
+from app import ledger, mail, main, plaid_client, rates, stripe_client  # noqa: E402
 from app.auth import User, current_user, user_from_claims  # noqa: E402
 from app.money import parse_amount, quantize  # noqa: E402
 
@@ -152,7 +152,7 @@ def test_withdraw_after_onboarding(as_user, payouts_ready, monkeypatch):
     assert client.post("/api/withdraw", json={"amount": "10"}).status_code == 409  # not onboarded yet
 
     assert client.post("/api/payouts/onboard").json()["url"].endswith("acct_1")
-    assert client.get("/api/payouts").json() == {"status": "ready", "currency": "USD"}
+    assert client.get("/api/payouts").json() == {"status": "ready", "currency": "USD", "provider": "stripe"}
     result = client.post("/api/withdraw", json={"amount": "10"}).json()
     assert result["balances"] == {"USD": "40.00"}
     assert result["transactions"][0]["status"] == "paid"
@@ -622,3 +622,96 @@ def test_topup_below_stripe_minimum_is_refused(as_user, monkeypatch):
     assert client.post("/api/topup", json={"amount": "0.50", "currency": "USD"}).json() == {
         "url": "https://checkout.stripe.com/x", "sessionId": "cs_test_min",
     }
+
+
+ADMIN = User(sub="admin", email="lyrclouds@gmail.com", phone="", name="Ada Admin")
+
+
+@pytest.fixture
+def plaid(monkeypatch):
+    """Plaid with sandbox keys, a person who finished the Hosted Link page, and a payout Plaid has taken."""
+    monkeypatch.setattr(plaid_client, "_keys", {"client_id": "c", "secret": "s", "env": "sandbox"})
+    monkeypatch.setattr(stripe_client, "get_checkout", lambda _: paid_session("admin"))
+    monkeypatch.setattr(plaid_client, "hosted_link", lambda sub, redirect: {"link_token": "link-1", "hosted_link_url": "https://secure.plaid.com/hl/1"})
+    monkeypatch.setattr(plaid_client, "linked_account", lambda token: {"public_token": "public-1", "account_id": "acc-1", "label": "Chase ••0000"} if token == "link-1" else None)
+    monkeypatch.setattr(plaid_client, "exchange", lambda public: "access-1")
+    state = {"payouts": [], "status": "pending"}
+
+    def pay_out(access, account, amount, name, reference):
+        state["payouts"].append((access, account, amount, name, reference))
+        return {"id": "tr-1", "status": "pending"}
+    monkeypatch.setattr(plaid_client, "pay_out", pay_out)
+    monkeypatch.setattr(plaid_client, "get_transfer", lambda transfer_id: {"id": transfer_id, "status": state["status"]})
+    return state
+
+
+def linked(client):
+    client.post("/api/topup/confirm", json={"sessionId": "cs_test_p1"})
+    assert client.get("/api/payouts").json()["status"] == "none"
+    assert client.post("/api/payouts/onboard", json={}).json() == {"url": "https://secure.plaid.com/hl/1"}
+    # Back from Plaid: the next look at payouts saves the account picked there
+    assert client.get("/api/payouts").json()["bank"] == "Chase ••0000"
+    return client
+
+
+def test_sandbox_plaid_is_only_for_admins(as_user, payouts_ready, plaid):
+    assert as_user(ALICE).get("/api/payouts").json()["provider"] == "stripe"
+    assert as_user(ADMIN).get("/api/payouts").json() == {"status": "none", "currency": "USD", "provider": "plaid", "bank": "", "test": True}
+
+
+def test_plaid_withdrawal_is_sent_once_and_settled_when_posted(as_user, plaid, monkeypatch):
+    client = as_user(ADMIN)
+    assert client.post("/api/withdraw", json={"amount": "10"}).status_code == 409  # no bank yet
+    linked(client)
+    assert client.get("/api/payouts").json() == {"status": "ready", "currency": "USD", "provider": "plaid", "bank": "Chase ••0000", "test": True}
+    profile = ledger.get_item("USER#admin", "PROFILE")
+    assert profile["bank"]["access"] == "access-1" and profile["bankLink"] == ""
+
+    result = client.post("/api/withdraw", json={"amount": "10"}).json()
+    tx = result["transactions"][0]
+    assert result["status"] == "pending" and result["balances"] == {"USD": "40.00"}
+    assert tx["counterparty"] == "Chase ••0000" and tx["reference"] == "tr-1"
+    assert plaid["payouts"] == [("access-1", "acc-1", Decimal("10"), "Ada Admin", tx["id"])]
+
+    # Still on its way: later checks only read its status, never pay again
+    monkeypatch.setattr(ledger, "pending", lambda sub, kind, older_than_seconds=60: original(sub, kind, 0))
+    assert client.get("/api/me").json()["transactions"][0]["status"] == "pending"
+    plaid["status"] = "posted"
+    assert client.get("/api/me").json()["transactions"][0]["status"] == "paid"
+    assert len(plaid["payouts"]) == 1 and ledger.balances("admin") == {"USD": Decimal("40")}
+
+
+def test_refused_plaid_withdrawal_restores_balance(as_user, plaid, monkeypatch):
+    def decline(*_):
+        raise plaid_client.PlaidError("Plaid declined the withdrawal.", definitive=True)
+    monkeypatch.setattr(plaid_client, "pay_out", decline)
+    client = linked(as_user(ADMIN))
+    assert client.post("/api/withdraw", json={"amount": "10"}).status_code == 502
+    me = client.get("/api/me").json()
+    assert me["balances"] == {"USD": "50.00"} and me["transactions"][0]["status"] == "failed"
+
+
+def test_returned_plaid_withdrawal_is_restored_by_the_sweep(as_user, plaid, monkeypatch):
+    client = linked(as_user(ADMIN))
+    client.post("/api/withdraw", json={"amount": "10"})
+    monkeypatch.setattr(ledger, "all_pending", lambda queue, older_than_seconds=60: original_all(queue, 0))
+    plaid["status"] = "returned"
+    assert main.sweep_withdrawals()["failed"] == 1
+    assert ledger.balances("admin") == {"USD": Decimal("50")}
+
+
+def test_unknown_status_of_a_made_transfer_never_restores_the_balance(as_user, plaid, monkeypatch):
+    client = linked(as_user(ADMIN))
+    client.post("/api/withdraw", json={"amount": "10"})
+    def refuse(_):
+        raise plaid_client.PlaidError("INVALID_API_KEYS", definitive=True)
+    monkeypatch.setattr(plaid_client, "get_transfer", refuse)
+    monkeypatch.setattr(ledger, "all_pending", lambda queue, older_than_seconds=60: original_all(queue, 0))
+    assert main.sweep_withdrawals()["pending"] == 1
+    assert ledger.balances("admin") == {"USD": Decimal("40")}
+
+
+def test_production_plaid_is_for_everyone(as_user, plaid, monkeypatch):
+    monkeypatch.setattr(plaid_client, "_keys", {"client_id": "c", "secret": "s", "env": "production"})
+    payouts = as_user(ALICE).get("/api/payouts").json()
+    assert payouts["provider"] == "plaid" and payouts["test"] is False

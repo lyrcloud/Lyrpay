@@ -129,6 +129,7 @@ Resources:
               Action: secretsmanager:GetSecretValue
               Resource:
                 - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:lyrpay/stripe-*'
+                - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:lyrpay/plaid-*'
                 - !Ref MailSigningSecret
             - Effect: Allow
               Action: ses:SendEmail
@@ -143,7 +144,7 @@ Resources:
             Schedule: rate(5 minutes)
             Input: '{"warm": true}'
 
-  # Finishes withdrawals Stripe didn't answer, for people who don't open their wallet again
+  # Finishes withdrawals Stripe didn't answer or Plaid hasn't posted yet, for people who don't open their wallet again
   SweepFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -156,7 +157,9 @@ Resources:
         - Statement:
             - Effect: Allow
               Action: secretsmanager:GetSecretValue
-              Resource: !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:lyrpay/stripe-*'
+              Resource:
+                - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:lyrpay/stripe-*'
+                - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:lyrpay/plaid-*'
       Events:
         Every15Minutes:
           Type: Schedule

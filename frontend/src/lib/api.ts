@@ -106,6 +106,11 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return body as T;
 }
 
+/** provider 'plaid': bank is the linked account's label and test is true for Plaid's sandbox (admins only) */
+export type Payouts = {
+  status: 'none' | 'incomplete' | 'ready'; currency: string; provider: 'plaid' | 'stripe'; bank?: string; test?: boolean;
+};
+
 const post = <T>(path: string, body: unknown) => request<T>(path, { method: 'POST', body: JSON.stringify(body) });
 
 export const api = {
@@ -154,7 +159,7 @@ export const api = {
   recipient: (q: string) => request<{ name: string }>(`/recipient?${new URLSearchParams({ q })}`),
   transfer: (to: string, amount: string, currency: string, note: string) =>
     post<{ sentTo: string } & Statement>('/transfer', { to, amount, currency, note }),
-  payouts: () => request<{ status: 'none' | 'incomplete' | 'ready'; currency: string }>('/payouts'),
+  payouts: () => request<Payouts>('/payouts'),
   onboardPayouts: () => post<{ url: string }>('/payouts/onboard', {}),
   adminOverview: (days = 14) => request<AdminOverview>(`/admin/overview?days=${days}`),
   withdraw: (amount: string) => post<{ withdrawn: string; currency: string; status: 'paid' | 'pending' } & Statement>('/withdraw', { amount }),
