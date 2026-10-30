@@ -11,7 +11,11 @@
     "assetBundlePatterns": [
       "**/*"
     ],
-    "extra": {},
+    "extra": {
+      "eas": {
+        "projectId": "f0f5e5af-baa6-4f37-8c88-99df964b0c18"
+      }
+    },
     "ios": {
       "bundleIdentifier": "com.lyrpay.app",
       "config": {
@@ -23,6 +27,7 @@
     },
     "plugins": [
       "expo-secure-store"
-    ]
+    ],
+    "owner": "lyrclouds-team"
   }
 }
