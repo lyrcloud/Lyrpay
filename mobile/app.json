@@ -2,7 +2,7 @@
   "expo": {
     "name": "Lyrpay",
     "slug": "lyrpay-mobile",
-    "version": "0.2.0",
+    "version": "0.3.0",
     "sdkVersion": "50.0.0",
     "platforms": [
       "ios",
@@ -13,7 +13,10 @@
     ],
     "extra": {},
     "ios": {
-      "bundleIdentifier": "com.lyrpay.app"
+      "bundleIdentifier": "com.lyrpay.app",
+      "config": {
+        "usesNonExemptEncryption": false
+      }
     },
     "android": {
       "package": "com.lyrpay.app"

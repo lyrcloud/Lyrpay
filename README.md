@@ -48,6 +48,19 @@ Needs AWS credentials, the SAM CLI and Node 20+.
 
 The first run creates the stack, then redeploys once so sign-in callbacks and payment redirects use the new CloudFront domain.
 
+### Mobile app
+
+Built in Expo's cloud with EAS (`mobile/eas.json`), so it needs an Expo account but no Xcode or Android Studio. Deploy the API first: the app relies on it.
+
+```bash
+cd mobile
+npx eas-cli login
+npx eas-cli init           # once: links the app to an Expo project (adds its id to app.json)
+npm run build:preview      # an Android APK to install on test phones
+npm run build              # store builds for iOS and Android; build numbers go up by themselves
+npm run submit             # sends the latest builds to App Store Connect and Google Play
+```
+
 ### Emails
 
 Sent through SES from `support@lyrpay.com` (`backend/app/mail.py`); each has a signed one-click unsubscribe link (`/api/unsubscribe`).
