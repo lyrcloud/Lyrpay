@@ -736,6 +736,37 @@ def test_stripe_connect_off_is_explained_and_not_offered(as_user, payouts_ready,
     assert client.post("/api/payouts/onboard").json()["url"].endswith("acct_2")
 
 
+def test_unfinished_connect_platform_profile_is_coming_soon(as_user, payouts_ready, monkeypatch):
+    calls = []
+
+    def refuse(**_):
+        calls.append(1)
+        raise stripe_client.StripeError(
+            "You must complete your platform profile to use Connect and create live connected accounts. Visit your "
+            "dashboard at https://dashboard.stripe.com/connect/accounts/overview to answer the questionnaire.", definitive=True)
+    monkeypatch.setattr(stripe_client, "create_connected_account", refuse)
+    monkeypatch.setattr(main, "_connect_off_until", 0.0)
+    client = as_user(ALICE)
+    client.patch("/api/me", json={"country": "US"})
+    response = client.post("/api/payouts/onboard")
+    assert response.status_code == 503 and response.json()["detail"] == "Bank withdrawals are coming soon."
+    assert client.get("/api/payouts").json()["status"] == "unavailable"
+    # Stripe isn't asked again during the pause
+    assert client.post("/api/payouts/onboard").status_code == 503 and len(calls) == 1
+
+
+def test_other_stripe_account_refusals_are_still_shown(as_user, payouts_ready, monkeypatch):
+    def refuse(**_):
+        raise stripe_client.StripeError("Country XX isn't supported.", definitive=True)
+    monkeypatch.setattr(stripe_client, "create_connected_account", refuse)
+    monkeypatch.setattr(main, "_connect_off_until", 0.0)
+    client = as_user(ALICE)
+    client.patch("/api/me", json={"country": "US"})
+    response = client.post("/api/payouts/onboard")
+    assert response.status_code == 502 and "isn't supported" in response.json()["detail"]
+    assert client.get("/api/payouts").json()["status"] == "none"
+
+
 def test_a_changed_plaid_secret_reaches_warm_instances(monkeypatch):
     secret = {"value": '{"client_id": "c", "secret": "s", "env": "sandbox"}'}
     class Secrets:

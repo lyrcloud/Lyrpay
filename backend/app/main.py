@@ -618,11 +618,13 @@ def link_bank(sub: str, profile: dict) -> dict | None:
     return plaid_bank(profile)
 
 
-# Until the Stripe account is signed up for Connect, Stripe refuses to make payout accounts. Each instance remembers
-# the refusal for a while and offers no bank setup meanwhile, then asks again so switching Connect on is picked up.
+# Until the Stripe account is signed up for Connect and its platform profile is complete, Stripe refuses to make payout
+# accounts. Each instance remembers the refusal for a while and offers no bank setup meanwhile, then asks again so
+# Connect being ready is picked up.
 CONNECT_OFF_FOR = 600
 _connect_off_until = 0.0
-CONNECT_OFF = "Bank withdrawals are being switched on. Check back soon."
+CONNECT_OFF = "Bank withdrawals are coming soon."
+CONNECT_NOT_READY = re.compile(r"signed up for Connect|platform profile", re.IGNORECASE)
 
 
 def connect_off() -> bool:
@@ -669,11 +671,12 @@ def payouts_onboard(request: Request, body: Onboard | None = None, user: User = 
         try:
             account = stripe_client.create_connected_account(user_sub=user.sub, email=user.email, country=profile["country"])
         except stripe_client.StripeError as error:
-            if "signed up for Connect" not in str(error):
+            if not (error.definitive and CONNECT_NOT_READY.search(str(error))):
                 raise HTTPException(status_code=502, detail=str(error))
             global _connect_off_until
             _connect_off_until = time.monotonic() + CONNECT_OFF_FOR
-            logger.warning("Stripe Connect is off for this account: %s", error)
+            # Only the admin needs Stripe's reason
+            logger.warning("Stripe Connect isn't ready for this account: %s", error)
             raise HTTPException(status_code=503, detail=CONNECT_OFF)
         account_id = account["id"]
         ledger.update_profile(user.sub, payoutAccount=account_id)

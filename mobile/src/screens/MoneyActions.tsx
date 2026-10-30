@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Linking, Text, TextInput } from 'react-native';
 import {
-  Payouts, Statement, checkCoupon, convert, fetchPayouts, onboardPayouts, quote, sendMoney, startTopUp, withdraw,
+  ApiError, Payouts, Statement, checkCoupon, convert, fetchPayouts, onboardPayouts, quote, sendMoney, startTopUp, withdraw,
 } from '../services/api';
 import { AmountField, Button, Link, money, styles, useAction } from '../ui';
 
@@ -158,7 +158,13 @@ export function Withdraw({ balances, onStatement, onNotice, resumed, enabled }: 
   }, [enabled, resumed]);
 
   const setUp = run(async () => {
-    await Linking.openURL((await onboardPayouts()).url);
+    try {
+      await Linking.openURL((await onboardPayouts()).url);
+    } catch (err) {
+      // 503: bank setup isn't switched on yet, so show it as coming soon rather than an error
+      if (!(err instanceof ApiError && err.status === 503) || !payouts) throw err;
+      setPayouts({ ...payouts, status: 'unavailable' });
+    }
   });
 
   const plaid = payouts?.provider === 'plaid';
@@ -175,9 +181,9 @@ export function Withdraw({ balances, onStatement, onNotice, resumed, enabled }: 
     setAmount('');
   });
 
-  if (!enabled) return <Text style={styles.muted}>Bank withdrawals are being switched on. Check back soon.</Text>;
+  if (!enabled) return <Text style={styles.muted}>Bank withdrawals are coming soon.</Text>;
   if (!payouts) return error ?<Text style={styles.error}>{error}</Text> : <Text style={styles.muted}>Loading…</Text>;
-  if (payouts.status === 'unavailable') return <Text style={styles.muted}>Bank withdrawals are being switched on. Check back soon.</Text>;
+  if (payouts.status === 'unavailable') return <Text style={styles.muted}>Bank withdrawals are coming soon.</Text>;
   const testMode = payouts.test && (
     <Text style={styles.hint}>Test mode (Plaid sandbox): pick a test bank, user_good / pass_good. No real money is sent.</Text>
   );

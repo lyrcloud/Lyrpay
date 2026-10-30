@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { api, type Payouts, type Statement } from '../lib/api';
+import { ApiError, api, type Payouts, type Statement } from '../lib/api';
 import { currencyName, formatMoney } from '../lib/format';
 
 type Props = {
@@ -196,7 +196,13 @@ export function Withdraw({ balances, onStatement, onNotice, enabled }: Props & {
   }, [enabled]);
 
   const setUp = run(async () => {
-    location.href = (await api.onboardPayouts()).url;
+    try {
+      location.href = (await api.onboardPayouts()).url;
+    } catch (err) {
+      // 503: bank setup isn't switched on yet, so show it as coming soon rather than an error
+      if (!(err instanceof ApiError && err.status === 503) || !payouts) throw err;
+      setPayouts({ ...payouts, status: 'unavailable' });
+    }
   });
 
   const plaid = payouts?.provider === 'plaid';
@@ -213,9 +219,9 @@ export function Withdraw({ balances, onStatement, onNotice, enabled }: Props & {
     setAmount('');
   });
 
-  if (!enabled) return <p className="empty">Bank withdrawals are being switched on. Check back soon.</p>;
+  if (!enabled) return <p className="empty">Bank withdrawals are coming soon.</p>;
   if (!payouts) return <p className="empty">Loading…</p>;
-  if (payouts.status === 'unavailable') return <p className="empty">Bank withdrawals are being switched on. Check back soon.</p>;
+  if (payouts.status === 'unavailable') return <p className="empty">Bank withdrawals are coming soon.</p>;
   const testMode = payouts.test && <p className="hint"><span className="badge soon">Test mode</span> Plaid sandbox: pick a test bank (user_good / pass_good). No real money is sent.</p>;
 
   if (payouts.status !== 'ready') {
