@@ -15,6 +15,7 @@ from app.auth import User
 #   USER#<sub>   TX#<iso>#<id>    one line of the statement
 #   HANDLE#<email|phone>  HANDLE  sub, so people can be paid by email or number
 #   TOPUP#<session>       TOPUP   marks a Stripe payment as credited, once
+#   TOPUP#<session>       PENDING a bank payment Stripe hasn't received yet: tx (the sk of its pending statement line)
 #   OPTOUT#<email>        OPTOUT  unsubscribed from Lyrpay emails
 #   UPDATE#<campaign>     <email> an announcement email sent (or being sent) to that address, once
 #   GIFT#<code>           GIFT    a gift card: amount, currency, status (active, redeemed, cancelled), who bought it
@@ -23,8 +24,8 @@ from app.auth import User
 #   REF#<code>            REF     sub, so a referral link finds who shared it
 #   SETTINGS              REWARDS referral bonuses and the business conversion fee, set by the admin
 # A profile can also carry referralCode, referredBy (sub), referralRewarded, and business (an application and its review).
-# Pending withdrawals also carry queue="withdraw", which puts them (and only them) in the sparse
-# "pending" index, so the scheduled sweep finds them without scanning the table.
+# Pending withdrawals and bank top-ups also carry queue="withdraw" or queue="topup", which puts them (and only them)
+# in the sparse "pending" index, so the scheduled sweep finds them without scanning the table.
 TABLE_NAME = os.getenv("LEDGER_TABLE", "lyrpay-ledger")
 
 _table = None
@@ -141,21 +142,21 @@ def _cutoff(older_than_seconds: int) -> str:
     return "TX#" + (datetime.now(timezone.utc) - timedelta(seconds=older_than_seconds)).isoformat(timespec="milliseconds")
 
 
-def pending_withdrawals(sub: str, older_than_seconds: int = 60) -> list[dict]:
-    """Withdrawals whose Stripe transfer had no clear answer, old enough that no request is still working on them."""
+def pending(sub: str, kind: str, older_than_seconds: int = 60) -> list[dict]:
+    """The person's pending withdrawals or bank top-ups, old enough that no request is still working on them."""
     return table().query(
         KeyConditionExpression=Key("pk").eq(f"USER#{sub}") & Key("sk").between("TX#", _cutoff(older_than_seconds)),
-        FilterExpression=Attr("kind").eq("withdraw") & Attr("status").eq("pending"),
+        FilterExpression=Attr("kind").eq(kind) & Attr("status").eq("pending"),
     )["Items"]
 
 
-def all_pending_withdrawals(older_than_seconds: int = 60) -> list[dict]:
-    """Everyone's pending withdrawals, from the sparse index; the sweep re-reads each before acting."""
+def all_pending(queue: str, older_than_seconds: int = 60) -> list[dict]:
+    """Everyone's pending withdrawals or bank top-ups, from the sparse index; the sweep re-reads each before acting."""
     items, start = [], {}
     while True:
         page = table().query(
             IndexName="pending",
-            KeyConditionExpression=Key("queue").eq("withdraw") & Key("sk").lte(_cutoff(older_than_seconds)),
+            KeyConditionExpression=Key("queue").eq(queue) & Key("sk").lte(_cutoff(older_than_seconds)),
             **start,
         )
         items += page["Items"]
@@ -180,12 +181,17 @@ def credit_topup(sub: str, session_id: str, currency: str, amount: Decimal,
                  bonus: Decimal = Decimal(0), extras: list | None = None) -> bool:
     """Credit a paid Stripe Checkout session, at most once. A promo code's bonus is added to the same balance update,
     with extras (spending the code) in the same transaction; if they can't go in (the code ran out meanwhile), the
-    top-up is credited without the bonus. True when the bonus went in."""
+    top-up is credited without the bonus. A bank payment shown as pending has its line marked paid instead of a new
+    one. True when the bonus went in."""
+    waiting = get_item(f"TOPUP#{session_id}", "PENDING")
+    line = _settle(f"USER#{sub}", waiting["tx"], "paid") if waiting else _put(
+        _tx_item(sub, "topup", currency, amount, reference=session_id, counterparty="Stripe"))
+
     def writes(credit: Decimal) -> list:
         return [
             _put({"pk": f"TOPUP#{session_id}", "sk": "TOPUP", "sub": sub, "at": _now()}, "attribute_not_exists(pk)"),
             _credit(sub, currency, credit),
-            _put(_tx_item(sub, "topup", currency, amount, reference=session_id, counterparty="Stripe")),
+            line,
         ]
 
     base = writes(amount)
@@ -198,6 +204,28 @@ def credit_topup(sub: str, session_id: str, currency: str, amount: Decimal,
                 raise
     _transact(base, AlreadyApplied())
     return False
+
+
+def start_topup(sub: str, session_id: str, currency: str, amount: Decimal):
+    """A bank payment Stripe hasn't received yet: a pending line on the statement, nothing on the balance until
+    credit_topup. Once per payment."""
+    tx = _tx_item(sub, "topup", currency, amount, reference=session_id, counterparty="Bank account",
+                  status="pending", queue="topup")
+    try:
+        _transact([
+            _put({"pk": f"TOPUP#{session_id}", "sk": "PENDING", "sub": sub, "tx": tx["sk"]}, "attribute_not_exists(pk)"),
+            _put(tx),
+        ], AlreadyApplied())
+    except AlreadyApplied:
+        pass
+
+
+def fail_topup(tx: dict):
+    """The bank didn't pay: the pending line is marked failed. Nothing was on the balance."""
+    try:
+        _transact([_settle(tx["pk"], tx["sk"], "failed")], AlreadyApplied())
+    except AlreadyApplied:
+        pass  # already settled by the sweep or another request
 
 
 def convert(sub: str, source: str, amount: Decimal, target: str, received: Decimal, rate: Decimal):
@@ -253,19 +281,21 @@ def finish_withdrawal(tx: dict, transfer_id: str):
             raise
 
 
+def _settle(pk: str, sk: str, status: str) -> dict:
+    """Take a pending line off the queue with its outcome, only if it is still pending."""
+    return {"Update": {
+        "TableName": TABLE_NAME, "Key": {"pk": pk, "sk": sk},
+        "UpdateExpression": "SET #s = :s REMOVE queue",
+        "ConditionExpression": "#s = :pending",
+        "ExpressionAttributeNames": {"#s": "status"},
+        "ExpressionAttributeValues": {":s": status, ":pending": "pending"},
+    }}
+
+
 def fail_withdrawal(tx: dict):
     """Stripe refused the transfer: put the money back on the balance."""
     sub = tx["pk"].removeprefix("USER#")
-    _transact([
-        _credit(sub, tx["currency"], -tx["amount"]),
-        {"Update": {
-            "TableName": TABLE_NAME, "Key": {"pk": tx["pk"], "sk": tx["sk"]},
-            "UpdateExpression": "SET #s = :s REMOVE queue",
-            "ConditionExpression": "#s = :pending",
-            "ExpressionAttributeNames": {"#s": "status"},
-            "ExpressionAttributeValues": {":s": "failed", ":pending": "pending"},
-        }},
-    ], AlreadyApplied())
+    _transact([_credit(sub, tx["currency"], -tx["amount"]), _settle(tx["pk"], tx["sk"], "failed")], AlreadyApplied())
 
 
 def mark_welcomed(sub: str) -> bool:

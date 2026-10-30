@@ -117,7 +117,7 @@ export const api = {
   crypto: (vs: string) => request<{ vs: string; coins: Coin[] }>(`/crypto/markets?vs=${vs.toLowerCase()}`),
   topup: (amount: string, currency: string, coupon = '') => post<{ url: string }>('/topup', { amount, currency, coupon }),
   confirmTopup: (sessionId: string) =>
-    post<{ credited: boolean; amount: string; currency: string; bonus: string; couponNote: string } & Statement>('/topup/confirm', { sessionId }),
+    post<{ credited: boolean; pending?: boolean; amount: string; currency: string; bonus: string; couponNote: string } & Statement>('/topup/confirm', { sessionId }),
   checkCoupon: (code: string, amount: string, currency: string) =>
     request<{ code: string; bonus: string; currency: string; description: string }>(`/coupons/check?${new URLSearchParams({ code, amount, currency })}`),
   rewards: () => request<Rewards>('/rewards'),

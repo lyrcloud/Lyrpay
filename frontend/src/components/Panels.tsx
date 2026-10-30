@@ -9,6 +9,9 @@ const KIND_LABEL: Record<Transaction['kind'], string> = {
 
 const STATUS_LABEL = { pending: 'Processing', failed: 'Failed, returned to balance', paid: '' };
 const CARD_STATUS_LABEL = { pending: 'Pending', failed: 'Cancelled, returned to balance', paid: '' };
+const TOPUP_STATUS_LABEL = { pending: 'On its way from your bank', failed: "Your bank didn't pay", paid: '' };
+const statusLabels = (kind: Transaction['kind']) =>
+  kind === 'card' ? CARD_STATUS_LABEL : kind === 'topup' ? TOPUP_STATUS_LABEL : STATUS_LABEL;
 
 export function Activity({ transactions }: { transactions: Transaction[] }) {
   if (!transactions.length) return <p className="empty">No activity yet. Add money to get started.</p>;
@@ -22,7 +25,7 @@ export function Activity({ transactions }: { transactions: Transaction[] }) {
               <strong>{KIND_LABEL[tx.kind]}{tx.counterparty && !['topup', 'withdraw'].includes(tx.kind) ? ` · ${tx.counterparty}` : ''}{tx.batch ? ' · bulk' : ''}</strong>
               <span>
                 {formatDate(tx.at)}{tx.note ? ` · ${tx.note}` : ''}
-                {tx.status && (tx.kind === 'card' ? CARD_STATUS_LABEL : STATUS_LABEL)[tx.status] ? ` · ${(tx.kind === 'card' ? CARD_STATUS_LABEL : STATUS_LABEL)[tx.status]}` : ''}
+                {tx.status && statusLabels(tx.kind)[tx.status] ? ` · ${statusLabels(tx.kind)[tx.status]}` : ''}
               </span>
             </div>
             <div className="tx-amount">

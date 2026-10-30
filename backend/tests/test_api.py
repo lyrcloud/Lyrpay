@@ -191,7 +191,7 @@ def test_unanswered_withdrawal_is_settled_later(as_user, payouts_ready, monkeypa
 
     # Stripe did make the transfer: it's found and recorded, never sent twice
     sent = []
-    monkeypatch.setattr(ledger, "pending_withdrawals", lambda sub, older_than_seconds=60: original(sub, 0))
+    monkeypatch.setattr(ledger, "pending", lambda sub, kind, older_than_seconds=60: original(sub, kind, 0))
     monkeypatch.setattr(stripe_client, "find_transfer", lambda account, reference: {"id": "tr_found"} if reference == tx_id else None)
     monkeypatch.setattr(stripe_client, "transfer_to", lambda *args: sent.append(args) or {"id": "tr_new"})
     me = client.get("/api/me").json()
@@ -207,7 +207,7 @@ def test_unanswered_withdrawal_is_retried_when_stripe_has_none(as_user, payouts_
     client.post("/api/payouts/onboard")
     client.post("/api/withdraw", json={"amount": "10"})
 
-    monkeypatch.setattr(ledger, "pending_withdrawals", lambda sub, older_than_seconds=60: original(sub, 0))
+    monkeypatch.setattr(ledger, "pending", lambda sub, kind, older_than_seconds=60: original(sub, kind, 0))
     monkeypatch.setattr(stripe_client, "transfer_to", lambda *_: {"id": "tr_retry"})
     assert client.get("/api/me").json()["transactions"][0]["status"] == "paid"
 
@@ -222,7 +222,7 @@ def test_sweep_settles_withdrawals_for_people_who_never_return(as_user, payouts_
     client.post("/api/withdraw", json={"amount": "10"})
     assert main.sweep_withdrawals() == {"paid": 0, "failed": 0, "pending": 0, "errors": 0}  # too recent
 
-    monkeypatch.setattr(ledger, "all_pending_withdrawals", lambda older_than_seconds=60: original_all(0))
+    monkeypatch.setattr(ledger, "all_pending", lambda queue, older_than_seconds=60: original_all(queue, 0))
     assert main.sweep_withdrawals()["pending"] == 1  # Stripe still not answering: left alone
     monkeypatch.setattr(stripe_client, "transfer_to", lambda *_: {"id": "tr_sweep"})
     assert main.sweep_withdrawals()["paid"] == 1
@@ -231,8 +231,53 @@ def test_sweep_settles_withdrawals_for_people_who_never_return(as_user, payouts_
     assert tx["status"] == "paid" and "queue" not in tx
 
 
-original = ledger.pending_withdrawals
-original_all = ledger.all_pending_withdrawals
+
+def bank_session(sub, intent="pi_bank"):
+    return {**paid_session(sub), "status": "complete", "payment_status": "unpaid", "payment_intent": intent}
+
+
+def test_bank_topup_waits_then_is_credited_once(as_user, monkeypatch):
+    monkeypatch.setattr(stripe_client, "get_checkout", lambda _: bank_session("alice"))
+    monkeypatch.setattr(stripe_client, "get_payment_intent", lambda _: {"status": "processing"})
+    client = as_user(ALICE)
+    first = client.post("/api/topup/confirm", json={"sessionId": "cs_bank_1"}).json()
+    client.post("/api/topup/confirm", json={"sessionId": "cs_bank_1"})  # back on the page again: still one line
+    assert first["pending"] and not first["credited"] and first["balances"] == {}
+    assert [(t["kind"], t["status"]) for t in first["transactions"]] == [("topup", "pending")]
+
+    monkeypatch.setattr(ledger, "all_pending", lambda queue, older_than_seconds=60: original_all(queue, 0))
+    assert main.sweep_topups()["pending"] == 1  # still on its way
+    monkeypatch.setattr(stripe_client, "get_checkout", lambda _: paid_session("alice"))
+    assert main.sweep_topups()["paid"] == 1
+    assert main.sweep_topups()["paid"] == 0  # settled ones leave the index
+    again = client.post("/api/topup/confirm", json={"sessionId": "cs_bank_1"}).json()
+    assert not again["credited"] and again["balances"] == {"USD": "50.00"}
+    assert [(t["kind"], t["status"]) for t in again["transactions"]] == [("topup", "paid")]
+
+
+def test_refused_bank_topup_is_marked_failed(as_user, monkeypatch):
+    monkeypatch.setattr(stripe_client, "get_checkout", lambda _: bank_session("alice"))
+    monkeypatch.setattr(stripe_client, "get_payment_intent", lambda _: {"status": "requires_payment_method"})
+    client = as_user(ALICE)
+    client.post("/api/topup/confirm", json={"sessionId": "cs_bank_2"})
+    monkeypatch.setattr(ledger, "pending", lambda sub, kind, older_than_seconds=60: original(sub, kind, 0))
+    me = client.get("/api/me").json()
+    assert me["balances"] == {} and me["transactions"][0]["status"] == "failed"
+    assert "queue" not in ledger.transactions("alice")[0]
+
+
+def test_bank_topup_waits_when_stripe_wont_say(as_user, monkeypatch):
+    monkeypatch.setattr(stripe_client, "get_checkout", lambda _: bank_session("alice"))
+    def refused(_):
+        raise stripe_client.StripeError("The provided key does not have the required permissions", definitive=True)
+    monkeypatch.setattr(stripe_client, "get_payment_intent", refused)
+    as_user(ALICE).post("/api/topup/confirm", json={"sessionId": "cs_bank_3"})
+    monkeypatch.setattr(ledger, "all_pending", lambda queue, older_than_seconds=60: original_all(queue, 0))
+    assert main.sweep_topups()["pending"] == 1
+
+
+original = ledger.pending
+original_all = ledger.all_pending
 
 
 @pytest.fixture

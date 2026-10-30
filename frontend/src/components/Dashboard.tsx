@@ -81,8 +81,9 @@ export default function Dashboard({ onSignedOut }: { onSignedOut: () => void }) 
     if (topup) {
       history.replaceState(null, '', '/');
       if (topup === 'cancelled') setNotice('Payment cancelled. Nothing was charged.');
-      else api.confirmTopup(topup).then(({ amount, currency, bonus, couponNote, ...result }) => {
+      else api.confirmTopup(topup).then(({ amount, currency, bonus, couponNote, pending, ...result }) => {
         setStatement(result);
+        if (pending) return setNotice(`${formatMoney(amount, currency)} is on its way from your bank. It usually reaches your balance within 4 business days.`);
         const extra = Number(bonus) > 0 ? ` plus a ${formatMoney(bonus, currency)} promo bonus 🎉` : couponNote ? ` (${couponNote})` : '';
         setNotice(`${formatMoney(amount, currency)} added to your balance${extra}.`);
       }).catch(err => setError(err.message));

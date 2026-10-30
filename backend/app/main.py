@@ -108,6 +108,7 @@ async def phone_auth(action: str, request: Request):
 def me(user: User = Depends(current_user)):
     profile = ledger.ensure_profile(user)
     settle_withdrawals(user.sub, profile)
+    settle_topups(user.sub)
     try:
         mail.welcome(profile)
     except Exception:
@@ -316,8 +317,22 @@ def topup_confirm(body: TopUpConfirm, user: User = Depends(current_user)):
     session = stripe_call(stripe_client.get_checkout, body.sessionId)
     if session.get("client_reference_id") != user.sub:
         raise HTTPException(status_code=409, detail="That payment belongs to another account.")
-    if session.get("payment_status") != "paid":
-        raise HTTPException(status_code=409, detail="That payment hasn't completed yet.")
+    if session.get("payment_status") == "paid":
+        return {**credit_checkout(user.sub, body.sessionId, session), **statement(user.sub)}
+    # Bank debits (ACH) finish checkout days before the money arrives; the line waits as pending until then
+    if session.get("status") == "complete" and session.get("payment_status") == "unpaid":
+        currency = session["currency"].upper()
+        amount = from_minor(session["amount_total"], currency)
+        ledger.start_topup(user.sub, body.sessionId, currency, amount)
+        return {
+            "credited": False, "pending": True, "currency": currency, "amount": money(amount, currency),
+            "bonus": money(Decimal(0), currency), "couponNote": "", **statement(user.sub),
+        }
+    raise HTTPException(status_code=409, detail="That payment hasn't completed yet.")
+
+
+def credit_checkout(sub: str, session_id: str, session: dict) -> dict:
+    """Credit a paid Checkout session to the person, with its promo bonus and any referral reward, at most once."""
     currency = session["currency"].upper()
     amount = from_minor(session["amount_total"], currency)
     # A promo code chosen at checkout is checked again now: it may have run out since
@@ -325,21 +340,21 @@ def topup_confirm(body: TopUpConfirm, user: User = Depends(current_user)):
     code = (session.get("metadata") or {}).get("coupon")
     if code:
         try:
-            coupon, bonus = rewards.coupon_bonus(code, user.sub, currency, amount)
-            extras = rewards.coupon_writes(coupon, user.sub, body.sessionId, currency, bonus)
+            coupon, bonus = rewards.coupon_bonus(code, sub, currency, amount)
+            extras = rewards.coupon_writes(coupon, sub, session_id, currency, bonus)
         except ValueError as error:
             coupon_note = str(error)
     credited = True
     try:
-        if not ledger.credit_topup(user.sub, body.sessionId, currency, amount, bonus, extras) and extras:
+        if not ledger.credit_topup(sub, session_id, currency, amount, bonus, extras) and extras:
             bonus, coupon_note = Decimal(0), "That promo code ran out before your payment finished."
     except ledger.AlreadyApplied:
         credited, bonus, coupon_note = False, Decimal(0), ""
     # Safe to repeat: the referral bonus is paid at most once per referred person
-    rewards.reward_referral(user.sub, currency, amount)
+    rewards.reward_referral(sub, currency, amount)
     return {
         "credited": credited, "currency": currency, "amount": money(amount, currency),
-        "bonus": money(bonus, currency), "couponNote": coupon_note, **statement(user.sub),
+        "bonus": money(bonus, currency), "couponNote": coupon_note,
     }
 
 
@@ -477,28 +492,63 @@ def settle_withdrawals(sub: str, profile: dict):
     """Finish withdrawals left pending when Stripe didn't answer, each time the person opens their wallet."""
     if not profile.get("payoutAccount"):
         return
-    for tx in ledger.pending_withdrawals(sub):
+    for tx in ledger.pending(sub, "withdraw"):
         try:
             send_withdrawal(tx, profile["payoutAccount"])
         except Exception:
             logger.exception("Settling withdrawal %s failed", tx["id"])
 
 
-def sweep_withdrawals() -> dict:
-    """Scheduled: settle everyone's pending withdrawals, including people who haven't come back."""
+def check_topup(tx: dict) -> str:
+    """Ask Stripe about a pending bank top-up and record the outcome: 'paid' (credited), 'failed' (the bank didn't
+    pay) or 'pending' (still on its way)."""
+    sub, session_id = tx["pk"].removeprefix("USER#"), tx["reference"]
+    try:
+        session = stripe_client.get_checkout(session_id)
+        if session.get("payment_status") == "paid":
+            credit_checkout(sub, session_id, session)
+            return "paid"
+        intent = session.get("payment_intent")
+        if intent and stripe_client.get_payment_intent(intent)["status"] in ("requires_payment_method", "canceled"):
+            ledger.fail_topup(tx)
+            return "failed"
+    except stripe_client.StripeError as error:
+        # Refused (a key without PaymentIntents read) or no answer: ask again next time
+        logger.warning("Checking top-up %s: %s", session_id, error)
+    return "pending"
+
+
+def settle_topups(sub: str):
+    """Credit bank top-ups that have arrived, each time the person opens their wallet."""
+    for tx in ledger.pending(sub, "topup"):
+        try:
+            check_topup(tx)
+        except Exception:
+            logger.exception("Checking top-up %s failed", tx["id"])
+
+
+def sweep(queue: str, settle) -> dict:
+    """Scheduled: settle everyone's pending withdrawals or bank top-ups, including people who haven't come back."""
     outcomes = {"paid": 0, "failed": 0, "pending": 0, "errors": 0}
-    for indexed in ledger.all_pending_withdrawals():
+    for indexed in ledger.all_pending(queue):
         # The index is eventually consistent; act only on what the table says now
         tx = ledger.get_item(indexed["pk"], indexed["sk"])
         if not tx or tx.get("status") != "pending":
             continue
-        profile = ledger.get_item(tx["pk"], "PROFILE") or {}
         try:
-            outcomes[send_withdrawal(tx, profile["payoutAccount"])] += 1
+            outcomes[settle(tx)] += 1
         except Exception:
-            logger.exception("Settling withdrawal %s failed", tx["id"])
+            logger.exception("Settling %s %s failed", queue, tx["id"])
             outcomes["errors"] += 1
     return outcomes
+
+
+def sweep_withdrawals() -> dict:
+    return sweep("withdraw", lambda tx: send_withdrawal(tx, (ledger.get_item(tx["pk"], "PROFILE") or {})["payoutAccount"]))
+
+
+def sweep_topups() -> dict:
+    return sweep("topup", check_topup)
 
 
 @app.get("/api/payouts")

@@ -67,7 +67,7 @@ Resources:
       KeySchema:
         - { AttributeName: pk, KeyType: HASH }
         - { AttributeName: sk, KeyType: RANGE }
-      # Sparse: only pending withdrawals carry `queue`, so the sweep reads just those
+      # Sparse: only pending withdrawals and bank top-ups carry `queue`, so the sweep reads just those
       GlobalSecondaryIndexes:
         - IndexName: pending
           KeySchema:
