@@ -29,6 +29,11 @@ Parameters:
     Default: ''
     Description: Link to the cardholder terms of your Stripe Issuing program, shown when someone gets a card.
 
+  AnthropicSecretName:
+    Type: String
+    Default: lyrshop/anthropic
+    Description: Secrets Manager secret holding the Anthropic API key Lyrbot uses (shared with Lyrcloud, Lyrshop and Lyrsoft).
+
 Conditions:
   HasDomain: !Not [!Equals [!Ref CertificateArn, '']]
 
@@ -51,6 +56,8 @@ Globals:
         FX_FEE_BPS: !Ref FxFeeBps
         MAIL_SIGNING_SECRET_ID: !Ref MailSigningSecret
         SITE_URL: !Ref PrimaryOrigin
+        ANTHROPIC_SECRET_ID: !Ref AnthropicSecretName
+        LYRBOT_LIMITS_TABLE: !Ref LyrbotLimitsTable
 
 Resources:
   LedgerTable:
@@ -78,6 +85,22 @@ Resources:
         PointInTimeRecoveryEnabled: true
       SSESpecification:
         SSEEnabled: true
+
+  # Lyrbot use counters per visitor per hour and for the whole site per day
+  LyrbotLimitsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: lyrpay-rate-limits
+      BillingMode: PAY_PER_REQUEST
+      TimeToLiveSpecification:
+        AttributeName: expiresAt
+        Enabled: true
+      AttributeDefinitions:
+        - { AttributeName: pk, AttributeType: S }
+        - { AttributeName: sk, AttributeType: S }
+      KeySchema:
+        - { AttributeName: pk, KeyType: HASH }
+        - { AttributeName: sk, KeyType: RANGE }
 
   WebClient:
     Type: AWS::Cognito::UserPoolClient
@@ -124,12 +147,15 @@ Resources:
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref LedgerTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LyrbotLimitsTable
         - Statement:
             - Effect: Allow
               Action: secretsmanager:GetSecretValue
               Resource:
                 - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:lyrpay/stripe-*'
                 - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:lyrpay/plaid-*'
+                - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${AnthropicSecretName}-*'
                 - !Ref MailSigningSecret
             - Effect: Allow
               Action: ses:SendEmail

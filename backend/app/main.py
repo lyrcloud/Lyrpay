@@ -8,11 +8,12 @@ from decimal import ROUND_UP, Decimal
 
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
-from app import cards, ledger, mail, plaid_client, rates, rewards, stripe_client
+from app import cards, ledger, lyrbot, mail, plaid_client, rates, rewards, stripe_client
 from app.auth import User, current_user
 from app.money import exponent, from_minor, parse_amount, quantize
 
@@ -80,6 +81,37 @@ def health():
 @app.get("/api/config")
 def config():
     return {"cardPayments": bool(stripe_client.secret_key()), "fxFeeBps": int(FX_FEE_BPS)}
+
+
+def visitor_ip(request: Request) -> str:
+    # CloudFront sets CloudFront-Viewer-Address ("ip:port") itself; viewers can't spoof it
+    viewer = request.headers.get("cloudfront-viewer-address", "")
+    if viewer:
+        return viewer.rsplit(":", 1)[0]
+    return request.client.host if request.client else "unknown"
+
+
+@app.post("/api/lyrbot")
+async def lyrbot_chat(request: Request):
+    """Lyrbot, the site's help assistant: open to every visitor, capped per visitor per hour and site-wide per day."""
+    try:
+        if not lyrbot.enabled():
+            return JSONResponse(status_code=503, content={"error": lyrbot.FALLBACK_REPLY})
+        try:
+            body = await request.json()
+        except ValueError:
+            return JSONResponse(status_code=400, content={"error": "Invalid JSON body."})
+        conversation = lyrbot.clean_messages(body.get("messages") if isinstance(body, dict) else None)
+        if not conversation:
+            return JSONResponse(status_code=422, content={"error": "Type a question for Lyrbot."})
+        limited = lyrbot.limit_message(visitor_ip(request))
+        if limited:
+            return JSONResponse(status_code=429, content={"error": limited})
+        status, answer = await run_in_threadpool(lyrbot.reply, conversation)
+        return JSONResponse(status_code=status, content=answer)
+    except Exception:
+        logger.exception("Lyrbot failed")
+        return JSONResponse(status_code=500, content={"error": lyrbot.FALLBACK_REPLY})
 
 
 PHONE_AUTH_URL = os.getenv("PHONE_AUTH_URL", "https://73j9469lxd.execute-api.us-east-1.amazonaws.com").rstrip("/")

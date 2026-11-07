@@ -515,3 +515,53 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
   .chart svg { height: 180px; }
   .home-pickers select { max-width: 130px; }
 }
+
+/* Lyrbot: the floating help assistant (components/Lyrbot.tsx), as on Lyrcloud, Lyrshop, Lyrtrip and Lyrsoft. */
+.lyrbot { position: fixed; right: 16px; bottom: calc(16px + env(safe-area-inset-bottom, 0px)); z-index: 50; display: flex; flex-direction: column; align-items: flex-end; gap: 12px; }
+.lyrbot-toggle { display: inline-flex; align-items: center; gap: 6px; height: 52px; padding: 0 16px 0 11px; border: 0; border-radius: 999px; background: var(--brand-gradient); color: #fff; font-weight: 700; box-shadow: 0 10px 25px rgb(91 91 246 / 0.35); transition: transform .2s, box-shadow .2s; }
+.lyrbot-toggle:hover { transform: translateY(-2px); box-shadow: 0 14px 30px rgb(91 91 246 / 0.45); }
+.lyrbot-toggle:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+.lyrbot-toggle svg { width: 32px; height: 32px; animation: lyrbot-bob 3s ease-in-out infinite; }
+.lyrbot svg .lyrbot-eye { fill: #5b5bf6; }
+.lyrbot svg .lyrbot-mouth { stroke: #5b5bf6; }
+.lyrbot-toggle svg .lyrbot-eye { animation: lyrbot-blink 4s infinite; transform-origin: center; transform-box: fill-box; }
+.lyrbot.is-open .lyrbot-toggle-label { display: none; }
+.lyrbot.is-open .lyrbot-toggle { padding: 0 11px; }
+@keyframes lyrbot-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-2px); } }
+@keyframes lyrbot-blink { 0%, 92%, 100% { transform: scaleY(1); } 95% { transform: scaleY(.1); } }
+.lyrbot-panel { display: flex; flex-direction: column; width: min(370px, calc(100vw - 32px)); height: min(540px, calc(100dvh - 120px)); border: 1px solid var(--border); border-radius: 18px; background: var(--surface); box-shadow: 0 24px 60px rgb(10 8 40 / 0.28); overflow: hidden; animation: lyrbot-open .2s ease; }
+@keyframes lyrbot-open { from { opacity: 0; transform: translateY(10px) scale(.98); } to { opacity: 1; transform: none; } }
+.lyrbot-header { display: flex; align-items: center; gap: 10px; padding: 14px 14px 14px 16px; background: var(--brand-gradient); color: #fff; }
+.lyrbot-header div { display: grid; flex: 1; }
+.lyrbot-header small { opacity: .85; font-size: 12.5px; }
+.lyrbot-avatar { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 50%; background: rgb(255 255 255 / 0.18); color: #fff; }
+.lyrbot-avatar svg { width: 26px; height: 26px; }
+.lyrbot-close { width: 36px; height: 36px; border: 0; border-radius: 50%; background: rgb(255 255 255 / 0.15); color: #fff; font-size: 24px; line-height: 1; }
+.lyrbot-close:hover, .lyrbot-close:focus-visible { background: rgb(255 255 255 / 0.3); }
+.lyrbot-messages { flex: 1; display: flex; flex-direction: column; gap: 10px; padding: 16px; overflow-y: auto; background: var(--surface-2); }
+.lyrbot-message { max-width: 85%; padding: 10px 13px; border-radius: 14px; font-size: 14.5px; line-height: 1.45; overflow-wrap: anywhere; }
+.lyrbot-message.is-bot { align-self: flex-start; border: 1px solid var(--border); border-bottom-left-radius: 4px; background: var(--surface); color: var(--text); }
+.lyrbot-message.is-user { align-self: flex-end; border-bottom-right-radius: 4px; background: var(--accent); color: var(--accent-text); white-space: pre-wrap; }
+.lyrbot-message.is-error { border-color: var(--negative); background: var(--error-bg); }
+.lyrbot-message a { color: var(--accent); font-weight: 600; text-decoration: underline; }
+.lyrbot-typing { display: inline-flex; gap: 4px; padding: 3px 0; }
+.lyrbot-typing i { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); animation: lyrbot-dot 1.2s infinite ease-in-out; }
+.lyrbot-typing i:nth-child(2) { animation-delay: .15s; }
+.lyrbot-typing i:nth-child(3) { animation-delay: .3s; }
+@keyframes lyrbot-dot { 0%, 80%, 100% { transform: translateY(0); opacity: .5; } 40% { transform: translateY(-4px); opacity: 1; } }
+.lyrbot-quick { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 16px; border-top: 1px solid var(--border); }
+.lyrbot-quick button { padding: 5px 11px; border: 1px solid var(--accent); border-radius: 999px; background: var(--info-bg); color: var(--accent); font-size: 13px; font-weight: 600; }
+.lyrbot-form { display: flex; gap: 8px; padding: 11px; border-top: 1px solid var(--border); }
+.lyrbot-input { flex: 1; min-width: 0; margin: 0; padding: 10px 14px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: var(--text); font: inherit; font-size: 16px; }
+.lyrbot-send { display: grid; place-items: center; flex: none; width: 40px; height: 40px; border: 0; border-radius: 50%; background: var(--accent); color: var(--accent-text); }
+.lyrbot-send svg { width: 18px; height: 18px; }
+.lyrbot-send:disabled { cursor: wait; }
+.lyrbot-contact { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 10px 16px 13px; font-size: 12.5px; color: var(--muted); }
+.lyrbot-contact a { display: inline-flex; align-items: center; gap: 4px; font-weight: 700; text-decoration: none; }
+.lyrbot-contact a:hover { text-decoration: underline; }
+.lyrbot-lyrchat { padding: 5px 10px; border-radius: 999px; background: rgb(98 71 234 / 0.14); color: #6247ea; }
+.lyrbot-whatsapp { padding: 5px 10px; border-radius: 999px; background: rgb(15 138 95 / 0.14); color: var(--positive); }
+.lyrbot-whatsapp svg { width: 15px; height: 15px; }
+.lyrbot-email { color: var(--accent); }
+@media (prefers-color-scheme: dark) { .lyrbot-lyrchat { color: #a99bff; } }
+@media (prefers-reduced-motion: reduce) { .lyrbot-toggle svg, .lyrbot-toggle svg .lyrbot-eye, .lyrbot-panel, .lyrbot-typing i { animation: none; } }
