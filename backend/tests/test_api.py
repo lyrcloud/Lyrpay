@@ -910,3 +910,44 @@ def test_topup_methods_without_dashboard_access_claim_nothing(monkeypatch):
     monkeypatch.setattr(stripe_client, "payment_method_configurations", refused)
     pk = topup_methods.for_country("PK")
     assert pk["local"] == [] and not pk["cardsOnly"]
+
+
+def test_topup_in_a_currency_stripe_refuses_is_paid_in_usd(as_user, monkeypatch):
+    monkeypatch.setattr(rates, "usd_rates", lambda: {"updated": "today", "rates": {"USD": 1, "EUR": 0.9, "XYZ": 300}})
+    monkeypatch.setattr(stripe_client, "UNCHARGEABLE", set())
+    calls = []
+
+    def create_checkout(**kwargs):
+        calls.append(kwargs)
+        if kwargs["currency"] != "USD":
+            raise stripe_client.StripeError("Invalid currency: xyz.", definitive=True)
+        return {"id": "cs_test_xyz", "url": "https://checkout.stripe.com/x"}
+
+    monkeypatch.setattr(stripe_client, "create_checkout", create_checkout)
+    alice = as_user(ALICE)
+    alice.get("/api/me")
+    assert alice.post("/api/topup", json={"amount": "1000", "currency": "XYZ"}).status_code == 200
+    # 1000 XYZ at 300 to the dollar, rounded up to a cent; the wallet is promised the XYZ amount
+    assert calls[-1]["currency"] == "USD" and calls[-1]["amount"] == Decimal("3.34")
+    assert calls[-1]["credit"] == ("XYZ", Decimal("1000.00"))
+    # Remembered: the next top-up goes straight to US dollars, and the form says so
+    alice.post("/api/topup", json={"amount": "1000", "currency": "XYZ"})
+    assert [c["currency"] for c in calls] == ["XYZ", "USD", "USD"]
+    assert alice.get("/api/topup/methods?currency=xyz").json()["chargedIn"] == "USD"
+    assert alice.get("/api/topup/methods?currency=eur").json()["chargedIn"] == "EUR"
+
+    paid = {**paid_session("alice", amount_total=334), "metadata": {"credit_currency": "XYZ", "credit_amount": "1000.00"}}
+    monkeypatch.setattr(stripe_client, "get_checkout", lambda _: paid)
+    done = alice.post("/api/topup/confirm", json={"sessionId": "cs_test_xyz"}).json()
+    assert done["credited"] and done["balances"]["XYZ"] == "1000.00"
+
+
+def test_other_stripe_errors_are_not_paid_in_usd(as_user, monkeypatch):
+    def create_checkout(**kwargs):
+        raise stripe_client.StripeError("Your account cannot currently make live charges.", definitive=True)
+
+    monkeypatch.setattr(stripe_client, "create_checkout", create_checkout)
+    alice = as_user(ALICE)
+    alice.get("/api/me")
+    response = alice.post("/api/topup", json={"amount": "10", "currency": "EUR"})
+    assert response.status_code == 502 and "EUR" not in stripe_client.UNCHARGEABLE

@@ -28,22 +28,42 @@ const countryName = (code: string) => {
 function WaysToPay({ currency, home }: { currency: string; home: string }) {
   const [ways, setWays] = useState<TopUpMethods | null>(null);
   useEffect(() => {
-    topUpMethods().then(setWays).catch(() => setWays(null));
-  }, [home]);
+    // Follows the chosen currency, and the country: changing country also changes the home currency
+    if (currency.length !== 3) return; // still being typed
+    const ask = setTimeout(() => topUpMethods(currency).then(setWays).catch(() => setWays(null)), 300);
+    return () => clearTimeout(ask);
+  }, [home, currency]);
+  const usd = ways?.currency === currency && ways.chargedIn !== currency && (
+    <Text style={styles.hint}>
+      Stripe can't charge in {currency}, so you'll pay the US dollar equivalent at today's mid-market rate. Your wallet
+      gets the full amount in {currency}.
+    </Text>
+  );
   const from = ways?.country ? countryName(ways.country) : '';
+  let main;
   if (ways?.cardsOnly) {
-    return (
+    main = (
       <Text style={styles.hint}>
-        From {from}, pay with a Visa or Mastercard debit or credit card, or Apple Pay or Google Pay. Ask your bank to switch
-        on international online payments first. Local wallets and bank transfers aren't available there yet.
+        From {from}, pay with a Visa or Mastercard debit or credit card, or Apple Pay or Google Pay. Ask your bank to
+        switch on international online payments first. Local wallets and bank transfers aren't available there yet.
+      </Text>
+    );
+  } else if (ways?.country && ways.local.length) {
+    const local = ways.local.map(m => (m.currency && m.currency !== currency ? `${m.label} (pay in ${m.currency})` : m.label));
+    main = <Text style={styles.hint}>From {from}: {ways.cards.join(', ')}, and {local.join(', ')}. All through Stripe.</Text>;
+  } else {
+    main = (
+      <Text style={styles.hint}>
+        Pay by card, Apple Pay, Google Pay, bank or a local payment method, through Stripe.
       </Text>
     );
   }
-  if (ways?.country && ways.local.length) {
-    const local = ways.local.map(m => (m.currency && m.currency !== currency ? `${m.label} (pay in ${m.currency})` : m.label));
-    return <Text style={styles.hint}>From {from}: {ways.cards.join(', ')}, and {local.join(', ')}. All through Stripe.</Text>;
-  }
-  return <Text style={styles.hint}>Pay by card, Apple Pay, Google Pay, bank or a local payment method, through Stripe.</Text>;
+  return (
+    <>
+      {usd}
+      {main}
+    </>
+  );
 }
 
 export function SendMoney({ balances, onStatement, onNotice }: Props) {

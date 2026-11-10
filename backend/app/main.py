@@ -395,12 +395,40 @@ def topup(body: TopUp, request: Request, user: User = Depends(current_user)):
     coupon = ""
     if body.coupon.strip():
         coupon = rewards.coupon_bonus(body.coupon, user.sub, currency, amount)[0]["code"]
-    session = stripe_call(
-        stripe_client.create_checkout,
-        user_sub=user.sub, email=user.email, amount=amount, currency=currency, origin=site_origin(request), coupon=coupon,
-    )
+    session = start_checkout(user, amount, currency, site_origin(request), coupon)
     # The mobile app confirms the session itself: Checkout returns to the website, where it may not be signed in
     return {"url": session["url"], "sessionId": session["id"]}
+
+
+def usd_charge(amount: Decimal, currency: str) -> Decimal:
+    """What a top-up in a currency Stripe can't charge costs in US dollars, at the mid-market rate, rounded up to a cent."""
+    return (amount * rates.rate(currency, "USD")).quantize(Decimal("0.01"), rounding=ROUND_UP)
+
+
+def start_checkout(user: User, amount: Decimal, currency: str, origin: str, coupon: str) -> dict:
+    """A Stripe Checkout session for a top-up. In a currency Stripe can't charge, the person pays the US dollar
+    equivalent and the wallet still gets the amount in their currency."""
+    common = {"user_sub": user.sub, "email": user.email, "origin": origin, "coupon": coupon}
+    if stripe_client.chargeable(currency):
+        try:
+            return stripe_client.create_checkout(amount=amount, currency=currency, **common)
+        except stripe_client.StripeError as error:
+            if not (error.definitive and stripe_client.INVALID_CURRENCY.search(str(error))):
+                raise HTTPException(status_code=502, detail=str(error))
+            stripe_client.UNCHARGEABLE.add(currency)
+    return stripe_call(
+        stripe_client.create_checkout, amount=usd_charge(amount, currency), currency="USD", credit=(currency, amount), **common,
+    )
+
+
+def checkout_credit(session: dict) -> tuple[str, Decimal]:
+    """The currency and amount a Checkout session puts in the wallet: what was paid, or for a payment made in US
+    dollars for a currency Stripe can't charge, the amount in that currency."""
+    meta = session.get("metadata") or {}
+    if meta.get("credit_currency") and meta.get("credit_amount"):
+        return meta["credit_currency"], Decimal(meta["credit_amount"])
+    currency = session["currency"].upper()
+    return currency, from_minor(session["amount_total"], currency)
 
 
 @app.get("/api/coupons/check")
@@ -412,9 +440,12 @@ def coupon_check(code: str, amount: str, currency: str, user: User = Depends(cur
 
 
 @app.get("/api/topup/methods")
-def topup_methods_for_me(user: User = Depends(current_user)):
-    """Ways to pay a top-up from the person's country: cards everywhere, plus the local methods Stripe has switched on."""
-    return topup_methods.for_country(ledger.ensure_profile(user).get("country", ""))
+def topup_methods_for_me(currency: str = "", user: User = Depends(current_user)):
+    """Ways to pay a top-up from the person's country: cards everywhere, plus the local methods Stripe has switched on.
+    chargedIn is USD when Stripe can't charge in the chosen currency."""
+    ways = topup_methods.for_country(ledger.ensure_profile(user).get("country", ""))
+    code = currency.upper()
+    return {**ways, "currency": code, "chargedIn": code if not code or stripe_client.chargeable(code) else "USD"}
 
 
 class TopUpConfirm(BaseModel):
@@ -432,8 +463,7 @@ def topup_confirm(body: TopUpConfirm, user: User = Depends(current_user)):
         return {**credit_checkout(user.sub, body.sessionId, session), **statement(user.sub)}
     # Bank debits (ACH) finish checkout days before the money arrives; the line waits as pending until then
     if session.get("status") == "complete" and session.get("payment_status") == "unpaid":
-        currency = session["currency"].upper()
-        amount = from_minor(session["amount_total"], currency)
+        currency, amount = checkout_credit(session)
         ledger.start_topup(user.sub, body.sessionId, currency, amount)
         return {
             "credited": False, "pending": True, "currency": currency, "amount": money(amount, currency),
@@ -444,8 +474,7 @@ def topup_confirm(body: TopUpConfirm, user: User = Depends(current_user)):
 
 def credit_checkout(sub: str, session_id: str, session: dict) -> dict:
     """Credit a paid Checkout session to the person, with its promo bonus and any referral reward, at most once."""
-    currency = session["currency"].upper()
-    amount = from_minor(session["amount_total"], currency)
+    currency, amount = checkout_credit(session)
     # A promo code chosen at checkout is checked again now: it may have run out since
     extras, bonus, coupon_note = [], Decimal(0), ""
     code = (session.get("metadata") or {}).get("coupon")

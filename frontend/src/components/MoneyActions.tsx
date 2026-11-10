@@ -43,27 +43,41 @@ function useAction() {
 function WaysToPay({ currency, home }: { currency: string; home: string }) {
   const [ways, setWays] = useState<TopUpMethods | null>(null);
   useEffect(() => {
-    // Changing country also changes the home currency, so this follows it
-    api.topupMethods().then(setWays).catch(() => setWays(null));
-  }, [home]);
+    // Follows the chosen currency, and the country: changing country also changes the home currency
+    const ask = setTimeout(() => api.topupMethods(currency).then(setWays).catch(() => setWays(null)), 300);
+    return () => clearTimeout(ask);
+  }, [home, currency]);
+  const usd = ways?.currency === currency && ways.chargedIn !== currency && (
+    <p className="hint">
+      Stripe can't charge in {currency}, so you'll pay the US dollar equivalent at today's mid-market rate. Your wallet
+      gets the full amount in {currency}.
+    </p>
+  );
   const from = ways?.country ? countryName(ways.country) : '';
+  let main;
   if (ways?.cardsOnly) {
-    return (
+    main = (
       <p className="hint">
         From {from}, pay with a Visa or Mastercard debit or credit card, or Apple Pay or Google Pay. Ask your bank to
         switch on international online payments first. Local wallets and bank transfers aren't available there yet.
       </p>
     );
-  }
-  if (ways?.country && ways.local.length) {
+  } else if (ways?.country && ways.local.length) {
     const local = ways.local.map(m => (m.currency && m.currency !== currency ? `${m.label} (pay in ${m.currency})` : m.label));
-    return <p className="hint">From {from}: {ways.cards.join(', ')}, and {local.join(', ')}. All through Stripe.</p>;
+    main = <p className="hint">From {from}: {ways.cards.join(', ')}, and {local.join(', ')}. All through Stripe.</p>;
+  } else {
+    main = (
+      <p className="hint">
+        Pay by card, Apple Pay, Google Pay, bank or a local payment method in your country, through Stripe.
+      {ways && !ways.country && ' Choose your country at the top of your wallet to see which ones work where you are.'}
+      </p>
+    );
   }
   return (
-    <p className="hint">
-      Pay by card, Apple Pay, Google Pay, bank or a local payment method in your country, through Stripe.
-      {ways && !ways.country && ' Choose your country at the top of your wallet to see which ones work where you are.'}
-    </p>
+    <>
+      {usd}
+      {main}
+    </>
   );
 }
 

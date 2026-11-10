@@ -61,10 +61,10 @@ export const sendMoney = (to: string, amount: string, currency: string, note: st
   post<{ sentTo: string } & Statement>('/transfer', { to, amount, currency, note });
 
 export type TopUpMethods = {
-  country: string; cards: string[]; local: { type: string; label: string; currency: string }[]; cardsOnly: boolean;
+  country: string; cards: string[]; local: { type: string; label: string; currency: string }[]; cardsOnly: boolean; currency: string; chargedIn: string;
 };
 
-export const topUpMethods = () => request<TopUpMethods>('/topup/methods');
+export const topUpMethods = (currency: string) => request<TopUpMethods>(`/topup/methods?${new URLSearchParams({ currency })}`);
 
 export const checkCoupon = (code: string, amount: string, currency: string) =>
   request<{ code: string; bonus: string; currency: string; description: string }>(

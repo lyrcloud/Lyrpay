@@ -1,4 +1,5 @@
 import os
+import re
 from decimal import Decimal
 
 import boto3
@@ -64,7 +65,20 @@ def stripe_amount(amount: Decimal, currency: str) -> int:
     return minor - minor % 10 if currency.upper() in THREE_DECIMAL else minor
 
 
-def create_checkout(*, user_sub: str, email: str, amount: Decimal, currency: str, origin: str, coupon: str = "") -> dict:
+# Currencies Stripe can't charge in, so the person pays the US dollar equivalent. Seeded with ones Stripe doesn't
+# offer, and added to whenever Stripe refuses a currency ("Invalid currency")
+UNCHARGEABLE = {"BTN", "CUP", "ERN", "IRR", "IQD", "KPW", "LYD", "SDG", "SSP", "SYP", "TMT", "VES"}
+INVALID_CURRENCY = re.compile(r"invalid currency", re.IGNORECASE)
+
+
+def chargeable(currency: str) -> bool:
+    return currency.upper() not in UNCHARGEABLE
+
+
+def create_checkout(*, user_sub: str, email: str, amount: Decimal, currency: str, origin: str, coupon: str = "",
+                    credit: tuple[str, Decimal] | None = None) -> dict:
+    """credit: the currency and amount to put in the wallet, when the payment is in another currency (a currency
+    Stripe can't charge, paid in US dollars)."""
     # No payment_method_types: Checkout offers every method switched on in the
     # Stripe dashboard that fits the currency and the payer's country
     # (cards, wallets, bank debits and local methods).
@@ -85,6 +99,9 @@ def create_checkout(*, user_sub: str, email: str, amount: Decimal, currency: str
     if coupon:
         # Read back when the payment is confirmed, to add the promo code's bonus
         data["metadata[coupon]"] = coupon
+    if credit:
+        data["metadata[credit_currency]"], data["metadata[credit_amount]"] = credit[0], str(credit[1])
+        data["line_items[0][price_data][product_data][name]"] = f"Lyrpay balance top-up: {credit[1]} {credit[0]}"
     return _request("POST", "/checkout/sessions", data)
 
 
