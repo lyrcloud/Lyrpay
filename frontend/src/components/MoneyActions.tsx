@@ -38,6 +38,9 @@ function useAction() {
   return { busy, error, run };
 }
 
+// Countries where Stripe offers no local wallet or bank method: only internationally enabled cards work
+const CARD_ONLY = ['PKR', 'BDT', 'LKR', 'BTN'];
+
 export function AddMoney({ currencies, home, cardPayments }: Props & { cardPayments: boolean }) {
   const [amount, setAmount] = useState('');
   const [currency, setCurrency] = useState(home);
@@ -69,6 +72,7 @@ export function AddMoney({ currencies, home, cardPayments }: Props & { cardPayme
       <p className="hint">
         Pay by card, Apple Pay, Google Pay, bank or a local payment method in your country, through Stripe.
       </p>
+      {CARD_ONLY.includes(currency) && <p className="hint">Paying from Pakistan, Bangladesh, Sri Lanka or Bhutan? Use a Visa or Mastercard debit or credit card, and ask your bank to switch on international online payments first. Local wallets and bank transfers aren't available yet.</p>}
       <div className="amount-row">
         <input inputMode="decimal" placeholder="0.00" required value={amount} onChange={e => setAmount(e.target.value)} aria-label="Amount" />
         <CurrencySelect value={currency} onChange={setCurrency} options={currencies} />

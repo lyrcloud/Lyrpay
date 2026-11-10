@@ -14,6 +14,9 @@ type Props = {
 
 const available = (balances: Record<string, string>, currency: string) => `Available: ${money(balances[currency] ?? 0, currency)}`;
 
+// Countries where Stripe offers no local wallet or bank method: only internationally enabled cards work
+const CARD_ONLY = ['PKR', 'BDT', 'LKR', 'BTN'];
+
 export function SendMoney({ balances, onStatement, onNotice }: Props) {
   const held = Object.keys(balances);
   const [to, setTo] = useState('');
@@ -82,6 +85,7 @@ export function AddMoney({ home, onNotice, cardPayments }: Props & { cardPayment
   return (
     <>
       <Text style={styles.hint}>Pay by card, Apple Pay, Google Pay, bank or a local payment method, through Stripe.</Text>
+      {CARD_ONLY.includes(currency) && <Text style={styles.hint}>Paying from Pakistan, Bangladesh, Sri Lanka or Bhutan? Use a Visa or Mastercard debit or credit card, and ask your bank to switch on international online payments first. Local wallets and bank transfers aren't available yet.</Text>}
       <AmountField amount={amount} onAmount={setAmount} currency={currency} onCurrency={setCurrency} />
       {promoOpen ? (
         <>
