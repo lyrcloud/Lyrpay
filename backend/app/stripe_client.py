@@ -92,6 +92,12 @@ def get_checkout(session_id: str) -> dict:
     return _request("GET", f"/checkout/sessions/{session_id}")
 
 
+def checkout_for_payment(intent_id: str) -> dict | None:
+    """The Checkout session a payment was made through, if any."""
+    sessions = _request("GET", "/checkout/sessions", params={"payment_intent": intent_id, "limit": 1})["data"]
+    return sessions[0] if sessions else None
+
+
 def get_payment_intent(intent_id: str) -> dict:
     """A bank debit's payment: 'processing' while it's on its way, back to 'requires_payment_method' if the bank refused."""
     return _request("GET", f"/payment_intents/{intent_id}")
@@ -109,7 +115,7 @@ def platform() -> dict:
     global _platform
     if _platform is None:
         account = _request("GET", "/account")
-        _platform = {"country": account["country"], "currency": account["default_currency"].upper()}
+        _platform = {"id": account["id"], "country": account["country"], "currency": account["default_currency"].upper()}
     return _platform
 
 

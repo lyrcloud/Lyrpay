@@ -827,3 +827,50 @@ def test_stock_markets_skip_symbols_yahoo_does_not_answer(monkeypatch):
     assert round(quotes[0]["change"], 6) == 10 and quotes[0]["sparkline"] == [100.0, 105.0, 110.0]
     assert client.get("/api/stocks/markets?group=nope").status_code == 400
     assert client.get("/api/stocks/markets?group=index").status_code == 400
+
+
+def stripe_app_signature(secret, user_id, account_id, stamp=None):
+    import hashlib
+    import hmac
+    import json
+    import time
+
+    stamp = stamp or int(time.time())
+    payload = json.dumps({"user_id": user_id, "account_id": account_id}, separators=(",", ":"))
+    return f"t={stamp},v1=" + hmac.new(secret.encode(), f"{stamp}.{payload}".encode(), hashlib.sha256).hexdigest()
+
+
+def test_stripe_app_needs_stripes_signature_for_lyrpays_account(as_user, monkeypatch):
+    from app import stripe_app
+
+    monkeypatch.setattr(stripe_app, "_secret", "absec_test")
+    monkeypatch.setattr(stripe_client, "_platform", {"id": "acct_lyrpay", "country": "US", "currency": "USD"})
+    monkeypatch.setattr(stripe_client, "checkout_for_payment", lambda _: {
+        "id": "cs_test_app", "metadata": {"purpose": "lyrpay_topup", "user": "alice"}})
+    monkeypatch.setattr(stripe_client, "get_checkout", lambda _: paid_session("alice"))
+    alice = as_user(ALICE)
+    alice.get("/api/me")
+    alice.post("/api/topup/confirm", json={"sessionId": "cs_test_app"})
+    client = TestClient(main.app)
+    body = {"user_id": "usr_1", "account_id": "acct_lyrpay", "payment": "pi_1"}
+
+    unsigned = client.post("/api/stripe-app/payment", json=body)
+    assert unsigned.status_code == 401 and unsigned.headers["access-control-allow-origin"] == "*"
+    forged = client.post("/api/stripe-app/payment", json=body, headers={"Stripe-Signature": stripe_app_signature("wrong", "usr_1", "acct_lyrpay")})
+    assert forged.status_code == 401
+    stale = stripe_app_signature("absec_test", "usr_1", "acct_lyrpay", stamp=1)
+    assert client.post("/api/stripe-app/payment", json=body, headers={"Stripe-Signature": stale}).status_code == 401
+    other = {**body, "account_id": "acct_other"}
+    signed_other = stripe_app_signature("absec_test", "usr_1", "acct_other")
+    assert client.post("/api/stripe-app/payment", json=other, headers={"Stripe-Signature": signed_other}).status_code == 403
+
+    signed = {"Stripe-Signature": stripe_app_signature("absec_test", "usr_1", "acct_lyrpay")}
+    payment = client.post("/api/stripe-app/payment", json=body, headers=signed).json()
+    assert payment["lyrpay"] and payment["status"] == "credited" and payment["user"]["name"] == "Alice"
+    assert payment["balances"] == {"USD": "50.00"}
+    overview = client.post("/api/stripe-app/overview", json=body, headers=signed).json()
+    assert overview["totals"]["users"] == 1 and overview["recent"][0]["kind"] == "topup"
+
+    preflight = client.options("/api/stripe-app/overview", headers={
+        "Origin": "null", "Access-Control-Request-Method": "POST", "Access-Control-Request-Headers": "content-type,stripe-signature"})
+    assert preflight.status_code == 204 and "stripe-signature" in preflight.headers["access-control-allow-headers"]

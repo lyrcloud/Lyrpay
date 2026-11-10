@@ -1,0 +1,19 @@
+{
+  "id": "com.lyrpay.dashboard",
+  "version": "1.0.0",
+  "name": "Lyrpay",
+  "icon": "./icon.png",
+  "permissions": [],
+  "stripe_api_access_type": "platform",
+  "distribution_type": "private",
+  "ui_extension": {
+    "views": [
+      { "viewport": "stripe.dashboard.drawer.default", "component": "Overview" },
+      { "viewport": "stripe.dashboard.payment.detail", "component": "PaymentDetail" }
+    ],
+    "content_security_policy": {
+      "connect-src": ["https://lyrpay.com/api/stripe-app/"],
+      "purpose": "Shows Lyrpay's own wallet records: totals, recent activity, and which Lyrpay wallet each top-up payment credited."
+    }
+  }
+}

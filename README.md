@@ -37,7 +37,17 @@ deploy.sh   builds and deploys all of it
 mobile/     Expo 50 app: sign in, sign up and reset passwords with a Lyr account (email or mobile number), balances,
             sending, top-ups (Stripe Checkout in the browser, confirmed by the app when it's back in front),
             converting, withdrawals, activity, crypto prices; Google sign-in opens the web dashboard
+stripe-app/ the Lyrpay Stripe App: a Dashboard drawer with Lyrpay's totals and latest activity, and a panel on each
+            payment showing the Lyrpay wallet it topped up and whether it was credited
 ```
+
+### Stripe App
+
+`stripe-app/` calls `/api/stripe-app/*`, which only answers requests Stripe has signed for Lyrpay's own account.
+To publish a new version: `cd stripe-app && npm install && stripe login && stripe apps upload --live`.
+After the first upload, copy the app's signing secret (`absec_...`, Stripe Dashboard → Developers → Apps → Lyrpay)
+into Secrets Manager as `lyrpay/stripe-app`; the API picks it up without a redeploy. Then install the app on the
+account from the same page.
 
 ## Deploy
 

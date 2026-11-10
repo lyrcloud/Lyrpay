@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
-from app import cards, ledger, lyrbot, mail, plaid_client, rates, rewards, stocks, stripe_client
+from app import cards, ledger, lyrbot, mail, plaid_client, rates, rewards, stocks, stripe_app, stripe_client
 from app.auth import User, current_user
 from app.money import exponent, from_minor, parse_amount, quantize
 
@@ -35,6 +35,24 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PATCH", "PUT"],
     allow_headers=["authorization", "content-type"],
 )
+
+
+STRIPE_APP_PATH = "/api/stripe-app/"
+
+
+@app.middleware("http")
+async def stripe_app_cors(request: Request, call_next):
+    """The Stripe App runs in a sandboxed frame in the Stripe Dashboard (origin "null"), so its endpoints answer any
+    origin; they need Stripe's signature instead of a sign-in, which a browser can't add on its own."""
+    if not request.url.path.startswith(STRIPE_APP_PATH):
+        return await call_next(request)
+    headers = {"Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "POST, OPTIONS",
+               "Access-Control-Allow-Headers": "content-type, stripe-signature", "Access-Control-Max-Age": "600"}
+    if request.method == "OPTIONS":
+        return HTMLResponse("", status_code=204, headers=headers)
+    response = await call_next(request)
+    response.headers.update(headers)
+    return response
 
 
 @app.exception_handler(ValueError)
@@ -311,6 +329,53 @@ def crypto(vs: str = "usd"):
 def stock_markets(group: str = "ai"):
     """Live quotes for AI shares, ETFs, world indices, popular stocks or commodities."""
     return {"group": group, "quotes": stocks.markets(group)}
+
+
+# ── The Lyrpay Stripe App (stripe-app/) ──────────────────────────────────────
+
+class StripeAppRequest(BaseModel):
+    user_id: str
+    account_id: str
+    payment: str = ""
+
+
+def stripe_app_caller(request: Request, body: StripeAppRequest):
+    if not stripe_app.verified(request.headers.get("stripe-signature", ""), body.user_id, body.account_id):
+        raise HTTPException(status_code=401, detail="This request isn't signed by the Lyrpay Stripe App.")
+    if body.account_id != stripe_call(stripe_client.platform)["id"]:
+        raise HTTPException(status_code=403, detail="The Lyrpay app only works on Lyrpay's own Stripe account.")
+
+
+@app.post("/api/stripe-app/overview")
+def stripe_app_overview(request: Request, body: StripeAppRequest):
+    """Lyrpay's totals for the app's Dashboard drawer."""
+    stripe_app_caller(request, body)
+    data = admin_overview(days=30, _=None)
+    return {"updated": data["updated"], "totals": data["totals"], "recent": data["recent"][:8]}
+
+
+@app.post("/api/stripe-app/payment")
+def stripe_app_payment(request: Request, body: StripeAppRequest):
+    """For a payment in the Dashboard: whether it's a Lyrpay top-up, whose, and whether it was credited."""
+    stripe_app_caller(request, body)
+    if not body.payment.startswith("pi_"):
+        return {"lyrpay": False}
+    session = stripe_call(stripe_client.checkout_for_payment, body.payment)
+    metadata = (session or {}).get("metadata") or {}
+    if metadata.get("purpose") != "lyrpay_topup" or not metadata.get("user"):
+        return {"lyrpay": False}
+    sub = metadata["user"]
+    profile = ledger.get_item(f"USER#{sub}", "PROFILE") or {}
+    credited = bool(ledger.get_item(f"TOPUP#{session['id']}", "TOPUP"))
+    waiting = bool(ledger.get_item(f"TOPUP#{session['id']}", "PENDING"))
+    return {
+        "lyrpay": True,
+        "session": session["id"],
+        "status": "credited" if credited else "pending" if waiting else "not credited",
+        "coupon": metadata.get("coupon", ""),
+        "user": {k: profile.get(k, "") for k in ("name", "email", "phone", "country", "currency", "created")},
+        **statement(sub),
+    }
 
 
 class TopUp(BaseModel):
