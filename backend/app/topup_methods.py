@@ -5,6 +5,7 @@ create_checkout), so this only tells people beforehand what they'll find there. 
 country and currency table for a US Stripe account (docs.stripe.com/payments/payment-methods/payment-method-support)
 and are shown only once the Dashboard has them switched on.
 """
+import logging
 import time
 
 from . import stripe_client
@@ -40,6 +41,8 @@ LOCAL = {
 }
 CARDS = ["Visa, Mastercard and other cards", "Apple Pay", "Google Pay", "Link"]
 
+logger = logging.getLogger("lyrpay")
+
 KEEP_FOR = 600
 _enabled: set | None = None
 _enabled_read = 0.0
@@ -60,8 +63,10 @@ def enabled() -> set | None:
                     if (default.get(kind) or {}).get("available")
                     and ((default.get(kind) or {}).get("display_preference") or {}).get("value") == "on"
                 }
-        except stripe_client.StripeError:
-            pass  # keep what was read before; with nothing yet, show cards only
+                logger.info("Top-up methods switched on in Stripe: %s", sorted(_enabled))
+        except stripe_client.StripeError as error:
+            # Usually the restricted key lacks "Payment Method Configurations: Read". Keep what was read before
+            logger.warning("Stripe wouldn't list payment method settings: %s", error)
     return _enabled
 
 
