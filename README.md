@@ -121,6 +121,24 @@ With `"env":"sandbox"` only admins (`ADMIN_EMAILS`) see Plaid, with Plaid's test
 everyone else keeps Stripe. Withdrawals stay pending until Plaid posts them, and a refused or returned transfer
 puts the money back. Switch to production keys and `"env":"production"` once Plaid approves Transfer.
 
+### Top-ups through PayPal
+
+With PayPal keys saved, the top-up form offers "Pay with PayPal" next to Stripe Checkout. The person approves the
+payment on PayPal, comes back to `/?topup=paypal&token=<order id>`, and Lyrpay captures the order (PayPal Orders v2)
+and credits the wallet once, with the same promo codes and referral rewards as Stripe. Currencies PayPal can't charge
+(and fractional HUF/JPY/TWD) are paid in US dollars and credited in the chosen currency. Payments PayPal holds
+(eChecks, reviews) show as pending and the 15-minute sweep credits or fails them.
+
+Keys come from a PayPal Business account: developer.paypal.com > Apps & Credentials > create a REST app.
+
+```bash
+aws secretsmanager create-secret --name lyrpay/paypal \
+  --secret-string '{"client_id":"...","secret":"...","env":"sandbox"}'
+```
+
+With `"env":"sandbox"` only admins (`ADMIN_EMAILS`) see PayPal, paying with sandbox buyer accounts; switch to the live
+app's keys and `"env":"live"` to offer it to everyone. Secret changes reach the backend within 5 minutes.
+
 ### Point lyrpay.com here
 
 lyrpay.com's DNS is on Cloudflare. Request an ACM certificate in us-east-1 for `lyrpay.com` and `www.lyrpay.com`, add its validation CNAMEs in Cloudflare, add the domains as CloudFront aliases, CNAME them to the distribution, then:

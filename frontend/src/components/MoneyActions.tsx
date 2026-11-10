@@ -40,8 +40,9 @@ function useAction() {
 
 /** Ways to pay from the person's country, by the same rule for everyone: cards everywhere, plus the local methods
  * switched on in Stripe for that country. */
-function WaysToPay({ currency, home }: { currency: string; home: string }) {
+function WaysToPay({ currency, home, onWays }: { currency: string; home: string; onWays: (ways: TopUpMethods | null) => void }) {
   const [ways, setWays] = useState<TopUpMethods | null>(null);
+  useEffect(() => onWays(ways), [ways]);
   useEffect(() => {
     // Follows the chosen currency, and the country: changing country also changes the home currency
     const ask = setTimeout(() => api.topupMethods(currency).then(setWays).catch(() => setWays(null)), 300);
@@ -87,8 +88,11 @@ export function AddMoney({ currencies, home, cardPayments }: Props & { cardPayme
   const [promo, setPromo] = useState('');
   const [promoOpen, setPromoOpen] = useState(false);
   const [bonus, setBonus] = useState<{ text: string; ok: boolean } | null>(null);
+  const [ways, setWays] = useState<TopUpMethods | null>(null);
+  const [method, setMethod] = useState<'stripe' | 'paypal'>('stripe');
   const { busy, error, run } = useAction();
   useEffect(() => setCurrency(home), [home]);
+  const paypal = !!ways?.paypal;
 
   // Shows the bonus a promo code adds, a moment after typing stops
   useEffect(() => {
@@ -103,13 +107,13 @@ export function AddMoney({ currencies, home, cardPayments }: Props & { cardPayme
   }, [promo, amount, currency]);
 
   const submit = run(async () => {
-    const { url } = await api.topup(amount, currency, bonus?.ok ? promo : '');
+    const { url } = await api.topup(amount, currency, bonus?.ok ? promo : '', method);
     location.href = url;
   });
 
   return (
     <form className="form" onSubmit={submit}>
-      <WaysToPay currency={currency} home={home} />
+      <WaysToPay currency={currency} home={home} onWays={setWays} />
       <div className="amount-row">
         <input inputMode="decimal" placeholder="0.00" required value={amount} onChange={e => setAmount(e.target.value)} aria-label="Amount" />
         <CurrencySelect value={currency} onChange={setCurrency} options={currencies} />
@@ -123,9 +127,18 @@ export function AddMoney({ currencies, home, cardPayments }: Props & { cardPayme
         <button type="button" className="link align-start" onClick={() => setPromoOpen(true)}>Have a promo code?</button>
       )}
       {error && <p className="error" role="alert">{error}</p>}
-      <button className="button primary" disabled={busy || !cardPayments}>
-        {busy ? 'Opening checkout…' : 'Continue to payment'}
+      <button className="button primary" disabled={busy || !cardPayments} onClick={() => setMethod('stripe')}>
+        {busy && method === 'stripe' ? 'Opening checkout…' : 'Continue to payment'}
       </button>
+      {paypal && (
+        <button className="button paypal" disabled={busy} onClick={() => setMethod('paypal')}>
+          {busy && method === 'paypal' ? 'Opening PayPal…' : 'Pay with PayPal'}
+        </button>
+      )}
+      {paypal && ways?.currency === currency && ways.paypalChargedIn && ways.paypalChargedIn !== currency && (
+        <p className="hint">PayPal can't charge in {currency}, so PayPal takes the US dollar equivalent. Your wallet gets the full amount in {currency}.</p>
+      )}
+      {ways?.paypalTest && <p className="hint">PayPal is in test mode (admins only): pay with a PayPal sandbox account.</p>}
       {!cardPayments && <p className="hint">Card payments are being switched on. Check back soon.</p>}
     </form>
   );

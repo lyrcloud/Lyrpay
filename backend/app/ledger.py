@@ -22,6 +22,7 @@ from app.auth import User
 #   USER#<sub>   GIFTSENT#<iso>#<code>  points to a gift card the person bought
 #   COUPON#<code>         COUPON  a promo code made by the admin; COUPON#<code> USED#<sub> marks a person's one use
 #   REF#<code>            REF     sub, so a referral link finds who shared it
+#   PAYPAL#<order id>     ORDER   a PayPal top-up order: sub, credit currency/amount, charge currency/value, coupon, env, capture
 #   SETTINGS              REWARDS referral bonuses and the business conversion fee, set by the admin
 # A profile can also carry referralCode, referredBy (sub), referralRewarded, and business (an application and its review),
 # payoutAccount (Stripe Connect) or bank (Plaid: access token, account id, label, env) with bankLink (a Link in progress).
@@ -179,14 +180,14 @@ def find_recipient(handle: str) -> dict | None:
 
 
 def credit_topup(sub: str, session_id: str, currency: str, amount: Decimal,
-                 bonus: Decimal = Decimal(0), extras: list | None = None) -> bool:
-    """Credit a paid Stripe Checkout session, at most once. A promo code's bonus is added to the same balance update,
+                 bonus: Decimal = Decimal(0), extras: list | None = None, counterparty: str = "Stripe") -> bool:
+    """Credit a paid Stripe Checkout session or PayPal order, at most once. A promo code's bonus is added to the same balance update,
     with extras (spending the code) in the same transaction; if they can't go in (the code ran out meanwhile), the
     top-up is credited without the bonus. A bank payment shown as pending has its line marked paid instead of a new
     one. True when the bonus went in."""
     waiting = get_item(f"TOPUP#{session_id}", "PENDING")
     line = _settle(f"USER#{sub}", waiting["tx"], "paid") if waiting else _put(
-        _tx_item(sub, "topup", currency, amount, reference=session_id, counterparty="Stripe"))
+        _tx_item(sub, "topup", currency, amount, reference=session_id, counterparty=counterparty))
 
     def writes(credit: Decimal) -> list:
         return [
@@ -207,10 +208,10 @@ def credit_topup(sub: str, session_id: str, currency: str, amount: Decimal,
     return False
 
 
-def start_topup(sub: str, session_id: str, currency: str, amount: Decimal):
+def start_topup(sub: str, session_id: str, currency: str, amount: Decimal, counterparty: str = "Bank account"):
     """A bank payment Stripe hasn't received yet: a pending line on the statement, nothing on the balance until
     credit_topup. Once per payment."""
-    tx = _tx_item(sub, "topup", currency, amount, reference=session_id, counterparty="Bank account",
+    tx = _tx_item(sub, "topup", currency, amount, reference=session_id, counterparty=counterparty,
                   status="pending", queue="topup")
     try:
         _transact([
@@ -219,6 +220,17 @@ def start_topup(sub: str, session_id: str, currency: str, amount: Decimal):
         ], AlreadyApplied())
     except AlreadyApplied:
         pass
+
+
+def save_paypal_order(order_id: str, **fields):
+    """What a PayPal order was opened for (whose, what it credits, what it charges), read back when it's paid."""
+    _transact([_put({"pk": f"PAYPAL#{order_id}", "sk": "ORDER", "at": _now(), **fields}, "attribute_not_exists(pk)")],
+              AlreadyApplied())
+
+
+def note_paypal_capture(order_id: str, capture_id: str):
+    table().update_item(Key={"pk": f"PAYPAL#{order_id}", "sk": "ORDER"}, UpdateExpression="SET capture = :c",
+                        ExpressionAttributeValues={":c": capture_id})
 
 
 def fail_topup(tx: dict):

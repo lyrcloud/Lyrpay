@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
-from app import cards, ledger, lyrbot, mail, plaid_client, rates, rewards, stocks, stripe_app, stripe_client, topup_methods
+from app import cards, ledger, lyrbot, mail, paypal_client, plaid_client, rates, rewards, stocks, stripe_app, stripe_client, topup_methods
 from app.auth import User, current_user
 from app.money import exponent, from_minor, parse_amount, quantize
 
@@ -98,7 +98,7 @@ def health():
 
 @app.get("/api/config")
 def config():
-    return {"cardPayments": bool(stripe_client.secret_key()), "fxFeeBps": int(FX_FEE_BPS)}
+    return {"cardPayments": bool(stripe_client.secret_key()), "paypal": paypal_client.env() == "live", "fxFeeBps": int(FX_FEE_BPS)}
 
 
 def visitor_ip(request: Request) -> str:
@@ -382,6 +382,7 @@ class TopUp(BaseModel):
     amount: str
     currency: str
     coupon: str = ""
+    method: str = "stripe"  # or "paypal"
 
 
 @app.post("/api/topup")
@@ -395,6 +396,10 @@ def topup(body: TopUp, request: Request, user: User = Depends(current_user)):
     coupon = ""
     if body.coupon.strip():
         coupon = rewards.coupon_bonus(body.coupon, user.sub, currency, amount)[0]["code"]
+    if body.method == "paypal":
+        if not paypal_topups(user.email):
+            raise ValueError("PayPal isn't switched on yet. Pay by card instead.")
+        return start_paypal(user, amount, currency, site_origin(request), coupon)
     session = start_checkout(user, amount, currency, site_origin(request), coupon)
     # The mobile app confirms the session itself: Checkout returns to the website, where it may not be signed in
     return {"url": session["url"], "sessionId": session["id"]}
@@ -421,6 +426,107 @@ def start_checkout(user: User, amount: Decimal, currency: str, origin: str, coup
     )
 
 
+def paypal_topups(email: str) -> bool:
+    """PayPal top-ups once its keys are set. Sandbox keys only for admins, whose test payments credit pretend money:
+    nobody else's wallet ever gets a sandbox payment."""
+    current = paypal_client.env()
+    return current == "live" or (current == "sandbox" and bool(email) and email in ADMIN_EMAILS)
+
+
+def paypal_call(call, *args, **kwargs):
+    try:
+        return call(*args, **kwargs)
+    except paypal_client.PayPalError as error:
+        raise HTTPException(status_code=502, detail=str(error))
+
+
+PAYPAL_REF = re.compile(r"^paypal_([A-Z0-9]{8,36})$")
+
+
+def start_paypal(user: User, amount: Decimal, currency: str, origin: str, coupon: str) -> dict:
+    """A PayPal order for a top-up. In a currency PayPal can't charge, the person pays the US dollar equivalent and
+    the wallet still gets the amount in their currency. The order is recorded so the payment is credited as recorded,
+    whatever comes back in the browser."""
+    charge_currency, charge = (currency, amount) if paypal_client.payable(currency, amount) else ("USD", usd_charge(amount, currency))
+    reference = f"{user.sub}-{int(time.time() * 1000)}"
+    description = f"Lyrpay balance top-up: {amount} {currency}"
+    order = paypal_call(paypal_client.create_order, reference=reference, amount=charge, currency=charge_currency,
+                        description=description, origin=origin)
+    ledger.save_paypal_order(order["id"], sub=user.sub, currency=currency, amount=amount, chargeCurrency=charge_currency,
+                             charge=paypal_client.value(charge, charge_currency), coupon=coupon, env=paypal_client.env())
+    return {"url": order["url"], "sessionId": f"paypal_{order['id']}"}
+
+
+def paypal_order(ref: str) -> tuple[str, dict]:
+    """The order id and Lyrpay's record of a PayPal top-up reference (paypal_<order id>)."""
+    match = PAYPAL_REF.match(ref)
+    record = ledger.get_item(f"PAYPAL#{match.group(1)}", "ORDER") if match else None
+    if not record:
+        raise ValueError("That payment link isn't valid.")
+    return match.group(1), record
+
+
+def paypal_capture_matches(capture: dict, record: dict) -> bool:
+    paid = capture.get("amount") or {}
+    return paid.get("currency_code") == record["chargeCurrency"] and Decimal(paid.get("value", "0")) == Decimal(record["charge"])
+
+
+def settle_paypal(sub: str, ref: str, order_id: str, record: dict, capture: dict) -> str:
+    """Record a PayPal capture: 'paid' (credited), 'pending' (PayPal is holding it) or 'failed'."""
+    status = capture.get("status")
+    if status in ("DECLINED", "FAILED"):
+        waiting = ledger.get_item(f"TOPUP#{ref}", "PENDING")
+        if waiting:
+            line = ledger.get_item(f"USER#{sub}", waiting["tx"])
+            if line:
+                ledger.fail_topup(line)
+        return "failed"
+    if not paypal_capture_matches(capture, record):
+        logger.error("PayPal order %s captured %s, expected %s %s: not credited", order_id, capture.get("amount"),
+                     record["charge"], record["chargeCurrency"])
+        raise HTTPException(status_code=409, detail="That PayPal payment doesn't match the top-up. Contact support.")
+    if status == "COMPLETED":
+        return "paid"
+    if capture.get("id") and not record.get("capture"):
+        ledger.note_paypal_capture(order_id, capture["id"])
+    ledger.start_topup(sub, ref, record["currency"], Decimal(record["amount"]), counterparty="PayPal")
+    return "pending"
+
+
+def confirm_paypal(user: User, ref: str) -> dict:
+    order_id, record = paypal_order(ref)
+    if record["sub"] != user.sub:
+        raise HTTPException(status_code=409, detail="That payment belongs to another account.")
+    if record.get("env") != paypal_client.env():
+        raise HTTPException(status_code=409, detail="That PayPal payment was made in test mode.")
+    currency, amount = record["currency"], Decimal(record["amount"])
+    if ledger.get_item(f"TOPUP#{ref}", "TOPUP"):  # credited already: say so without asking PayPal
+        return {"credited": False, "currency": currency, "amount": money(amount, currency), "bonus": money(Decimal(0), currency),
+                "couponNote": "", **statement(user.sub)}
+    order = paypal_call(paypal_client.get_order, order_id)
+    if order.get("status") == "APPROVED":
+        try:
+            order = paypal_client.capture(order_id)
+        except paypal_client.PayPalError as error:
+            if error.issue == "ORDER_ALREADY_CAPTURED":
+                order = paypal_call(paypal_client.get_order, order_id)
+            elif error.definitive:
+                # INSTRUMENT_DECLINED and the like: nothing was taken; the person can try again with another way to pay
+                raise HTTPException(status_code=409, detail=f"PayPal didn't take the payment: {error}")
+            else:
+                raise HTTPException(status_code=502, detail=str(error))
+    capture = paypal_client.first_capture(order) if order.get("status") == "COMPLETED" else None
+    if not capture:
+        raise HTTPException(status_code=409, detail="That payment hasn't completed yet.")
+    outcome = settle_paypal(user.sub, ref, order_id, record, capture)
+    if outcome == "failed":
+        raise HTTPException(status_code=409, detail="PayPal declined the payment. Nothing was added.")
+    if outcome == "pending":
+        return {"credited": False, "pending": True, "currency": currency, "amount": money(amount, currency),
+                "bonus": money(Decimal(0), currency), "couponNote": "", **statement(user.sub)}
+    return {**credit_payment(user.sub, ref, currency, amount, record.get("coupon", ""), "PayPal"), **statement(user.sub)}
+
+
 def checkout_credit(session: dict) -> tuple[str, Decimal]:
     """The currency and amount a Checkout session puts in the wallet: what was paid, or for a payment made in US
     dollars for a currency Stripe can't charge, the amount in that currency."""
@@ -445,7 +551,13 @@ def topup_methods_for_me(currency: str = "", user: User = Depends(current_user))
     chargedIn is USD when Stripe can't charge in the chosen currency."""
     ways = topup_methods.for_country(ledger.ensure_profile(user).get("country", ""))
     code = currency.upper()
-    return {**ways, "currency": code, "chargedIn": code if not code or stripe_client.chargeable(code) else "USD"}
+    paypal = paypal_topups(user.email)
+    return {
+        **ways, "currency": code, "chargedIn": code if not code or stripe_client.chargeable(code) else "USD",
+        # PayPal: whether it's offered, and the currency it charges this top-up in (whole HUF/JPY/TWD amounts aside)
+        "paypal": paypal, "paypalTest": paypal and paypal_client.env() == "sandbox",
+        "paypalChargedIn": code if not code or code in paypal_client.CURRENCIES else "USD",
+    }
 
 
 class TopUpConfirm(BaseModel):
@@ -454,6 +566,8 @@ class TopUpConfirm(BaseModel):
 
 @app.post("/api/topup/confirm")
 def topup_confirm(body: TopUpConfirm, user: User = Depends(current_user)):
+    if body.sessionId.startswith("paypal_"):
+        return confirm_paypal(user, body.sessionId)
     if not re.match(r"^cs_[A-Za-z0-9_]+$", body.sessionId):
         raise ValueError("That payment link isn't valid.")
     session = stripe_call(stripe_client.get_checkout, body.sessionId)
@@ -475,9 +589,13 @@ def topup_confirm(body: TopUpConfirm, user: User = Depends(current_user)):
 def credit_checkout(sub: str, session_id: str, session: dict) -> dict:
     """Credit a paid Checkout session to the person, with its promo bonus and any referral reward, at most once."""
     currency, amount = checkout_credit(session)
+    return credit_payment(sub, session_id, currency, amount, (session.get("metadata") or {}).get("coupon", ""), "Stripe")
+
+
+def credit_payment(sub: str, session_id: str, currency: str, amount: Decimal, code: str, counterparty: str) -> dict:
+    """Credit a paid top-up (a Checkout session or a PayPal order) with its promo bonus and any referral reward."""
     # A promo code chosen at checkout is checked again now: it may have run out since
     extras, bonus, coupon_note = [], Decimal(0), ""
-    code = (session.get("metadata") or {}).get("coupon")
     if code:
         try:
             coupon, bonus = rewards.coupon_bonus(code, sub, currency, amount)
@@ -486,7 +604,7 @@ def credit_checkout(sub: str, session_id: str, session: dict) -> dict:
             coupon_note = str(error)
     credited = True
     try:
-        if not ledger.credit_topup(sub, session_id, currency, amount, bonus, extras) and extras:
+        if not ledger.credit_topup(sub, session_id, currency, amount, bonus, extras, counterparty) and extras:
             bonus, coupon_note = Decimal(0), "That promo code ran out before your payment finished."
     except ledger.AlreadyApplied:
         credited, bonus, coupon_note = False, Decimal(0), ""
@@ -696,6 +814,8 @@ def check_topup(tx: dict) -> str:
     """Ask Stripe about a pending bank top-up and record the outcome: 'paid' (credited), 'failed' (the bank didn't
     pay) or 'pending' (still on its way)."""
     sub, session_id = tx["pk"].removeprefix("USER#"), tx["reference"]
+    if session_id.startswith("paypal_"):
+        return check_paypal_topup(sub, tx)
     try:
         session = stripe_client.get_checkout(session_id)
         if session.get("payment_status") == "paid":
@@ -709,6 +829,23 @@ def check_topup(tx: dict) -> str:
         # Refused (a key without PaymentIntents read) or no answer: ask again next time
         logger.warning("Checking top-up %s: %s", session_id, error)
     return "pending"
+
+
+def check_paypal_topup(sub: str, tx: dict) -> str:
+    """A PayPal payment PayPal was holding: credited once it completes, marked failed if it's declined."""
+    ref = tx["reference"]
+    order_id, record = paypal_order(ref)
+    if not record.get("capture") or record.get("env") != paypal_client.env():
+        return "pending"
+    try:
+        capture = paypal_client.get_capture(record["capture"])
+    except paypal_client.PayPalError as error:
+        logger.warning("Checking PayPal top-up %s: %s", ref, error)
+        return "pending"
+    outcome = settle_paypal(sub, ref, order_id, record, capture)
+    if outcome == "paid":
+        credit_payment(sub, ref, record["currency"], Decimal(record["amount"]), record.get("coupon", ""), "PayPal")
+    return outcome
 
 
 def settle_topups(sub: str):

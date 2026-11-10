@@ -94,6 +94,8 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .button.primary:not(:disabled):hover { background-position: 100% 0; box-shadow: 0 8px 22px rgb(91 91 246 / 0.35); }
 .button.primary { background-color: var(--accent); color: var(--accent-text); border-color: transparent; }
 .button.google { width: 100%; }
+.button.paypal { background: #ffc439; color: #111; border-color: transparent; }
+.button.paypal:not(:disabled):hover { background: #f2b52e; }
 .link { background: none; border: none; color: var(--accent); padding: 0; font-weight: 600; }
 
 .form { display: flex; flex-direction: column; gap: 14px; }

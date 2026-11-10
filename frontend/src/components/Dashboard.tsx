@@ -68,7 +68,7 @@ export default function Dashboard({ onSignedOut }: { onSignedOut: () => void }) 
       setProfile(profile);
     }).catch(err => (err instanceof ApiError && err.status === 401 ? leave() : setError(err.message)));
 
-    // Back from Stripe Checkout
+    // Back from Stripe Checkout or PayPal
     const params = new URLSearchParams(location.search);
     const topup = params.get('topup');
     // Back from adding a bank account (Plaid or Stripe)
@@ -80,8 +80,10 @@ export default function Dashboard({ onSignedOut }: { onSignedOut: () => void }) 
     }
     if (topup) {
       history.replaceState(null, '', '/');
+      // PayPal returns with ?topup=paypal&token=<order id>
+      const reference = topup === 'paypal' ? `paypal_${params.get('token') ?? ''}` : topup;
       if (topup === 'cancelled') setNotice('Payment cancelled. Nothing was charged.');
-      else api.confirmTopup(topup).then(({ amount, currency, bonus, couponNote, pending, ...result }) => {
+      else api.confirmTopup(reference).then(({ amount, currency, bonus, couponNote, pending, ...result }) => {
         setStatement(result);
         if (pending) return setNotice(`${formatMoney(amount, currency)} is on its way from your bank. It usually reaches your balance within 4 business days.`);
         const extra = Number(bonus) > 0 ? ` plus a ${formatMoney(bonus, currency)} promo bonus 🎉` : couponNote ? ` (${couponNote})` : '';

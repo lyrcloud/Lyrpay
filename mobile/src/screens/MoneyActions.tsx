@@ -25,8 +25,9 @@ const countryName = (code: string) => {
 
 /** Ways to pay from the person's country, by the same rule for everyone: cards everywhere, plus the local methods
  * switched on in Stripe for that country. */
-function WaysToPay({ currency, home }: { currency: string; home: string }) {
+function WaysToPay({ currency, home, onWays }: { currency: string; home: string; onWays: (ways: TopUpMethods | null) => void }) {
   const [ways, setWays] = useState<TopUpMethods | null>(null);
+  useEffect(() => onWays(ways), [ways]);
   useEffect(() => {
     // Follows the chosen currency, and the country: changing country also changes the home currency
     if (currency.length !== 3) return; // still being typed
@@ -107,6 +108,7 @@ export function AddMoney({ home, onNotice, cardPayments }: Props & { cardPayment
   const [promo, setPromo] = useState('');
   const [promoOpen, setPromoOpen] = useState(false);
   const [bonus, setBonus] = useState<{ text: string; ok: boolean } | null>(null);
+  const [ways, setWays] = useState<TopUpMethods | null>(null);
   const { busy, error, run } = useAction();
 
   useEffect(() => setCurrency(home), [home]);
@@ -123,9 +125,10 @@ export function AddMoney({ home, onNotice, cardPayments }: Props & { cardPayment
     return () => clearTimeout(timer);
   }, [promo, amount, currency]);
 
-  const pay = run(async () => {
-    await Linking.openURL(await startTopUp(amount, currency, bonus?.ok ? promo : ''));
-    onNotice('Finish paying in your browser, then come back here. Your balance updates once Stripe confirms the payment.');
+  const pay = (method: 'stripe' | 'paypal') => run(async () => {
+    await Linking.openURL(await startTopUp(amount, currency, bonus?.ok ? promo : '', method));
+    const by = method === 'paypal' ? 'PayPal' : 'Stripe';
+    onNotice(`Finish paying in your browser, then come back here. Your balance updates once ${by} confirms the payment.`);
     setAmount('');
     setPromo('');
     setPromoOpen(false);
@@ -133,7 +136,7 @@ export function AddMoney({ home, onNotice, cardPayments }: Props & { cardPayment
 
   return (
     <>
-      <WaysToPay currency={currency} home={home} />
+      <WaysToPay currency={currency} home={home} onWays={setWays} />
       <AmountField amount={amount} onAmount={setAmount} currency={currency} onCurrency={setCurrency} />
       {promoOpen ? (
         <>
@@ -147,7 +150,9 @@ export function AddMoney({ home, onNotice, cardPayments }: Props & { cardPayment
         <Link title="Have a promo code?" onPress={() => setPromoOpen(true)} />
       )}
       {!!error && <Text style={styles.error}>{error}</Text>}
-      <Button title="Continue to payment" onPress={pay} busy={busy} disabled={!cardPayments} />
+      <Button title="Continue to payment" onPress={pay('stripe')} busy={busy} disabled={!cardPayments} />
+      {!!ways?.paypal && <Button title="Pay with PayPal" onPress={pay('paypal')} busy={busy} />}
+      {!!ways?.paypalTest && <Text style={styles.hint}>PayPal is in test mode (admins only).</Text>}
       {!cardPayments && <Text style={styles.hint}>Card payments are being switched on. Check back soon.</Text>}
     </>
   );
