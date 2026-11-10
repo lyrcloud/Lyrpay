@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
-from app import cards, ledger, lyrbot, mail, plaid_client, rates, rewards, stripe_client
+from app import cards, ledger, lyrbot, mail, plaid_client, rates, rewards, stocks, stripe_client
 from app.auth import User, current_user
 from app.money import exponent, from_minor, parse_amount, quantize
 
@@ -305,6 +305,12 @@ def fx_rates(base: str = "USD"):
 @app.get("/api/crypto/markets")
 def crypto(vs: str = "usd"):
     return {"vs": vs.upper(), "coins": rates.crypto_markets(vs)}
+
+
+@app.get("/api/stocks/markets")
+def stock_markets(group: str = "ai"):
+    """Live quotes for AI shares, ETFs, world indices, popular stocks or commodities."""
+    return {"group": group, "quotes": stocks.markets(group)}
 
 
 class TopUp(BaseModel):

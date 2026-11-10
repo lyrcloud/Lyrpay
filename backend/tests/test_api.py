@@ -804,3 +804,26 @@ def test_rejected_plaid_keys_are_set_aside_until_the_secret_changes(as_user, pay
     # Different keys saved: used again
     monkeypatch.setattr(plaid_client, "_keys", {"client_id": "c", "secret": "production-secret", "env": "production"})
     assert client.get("/api/payouts").json()["provider"] == "plaid"
+
+
+def test_stock_markets_skip_symbols_yahoo_does_not_answer(monkeypatch):
+    import httpx
+    from app import stocks
+
+    def fake_get(url, params):
+        request = httpx.Request("GET", url)
+        if "NVDA" not in url:
+            return httpx.Response(404, request=request)
+        return httpx.Response(200, request=request, json={"chart": {"result": [{
+            "meta": {"regularMarketPrice": 110.0, "previousClose": 100.0, "currency": "USD", "fullExchangeName": "NasdaqGS"},
+            "indicators": {"quote": [{"close": [100.0, None, 105.0, 110.0]}]},
+        }]}})
+
+    monkeypatch.setattr(stocks._http, "get", fake_get)
+    monkeypatch.setattr(stocks, "_cache", {})
+    client = TestClient(main.app)
+    quotes = client.get("/api/stocks/markets?group=ai").json()["quotes"]
+    assert [q["symbol"] for q in quotes] == ["NVDA"]
+    assert round(quotes[0]["change"], 6) == 10 and quotes[0]["sparkline"] == [100.0, 105.0, 110.0]
+    assert client.get("/api/stocks/markets?group=nope").status_code == 400
+    assert client.get("/api/stocks/markets?group=index").status_code == 400

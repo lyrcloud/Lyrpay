@@ -63,6 +63,13 @@ export type Coin = {
   sparkline: number[];
 };
 
+export type StockGroup = 'ai' | 'etf' | 'index' | 'stock' | 'commodity';
+export type Quote = {
+  symbol: string; name: string; price: number; change: number | null; currency: string; exchange: string;
+  high52: number | null; low52: number | null; dayHigh: number | null; dayLow: number | null;
+  volume: number | null; time: number | null; sparkline: number[];
+};
+
 export type AdminOverview = {
   updated: string;
   totals: {
@@ -120,6 +127,7 @@ export const api = {
     request<{ profile: Profile }>('/me', { method: 'PATCH', body: JSON.stringify(fields) }),
   rates: (base: string) => request<{ base: string; updated: string; rates: Record<string, number> }>(`/rates?base=${base}`),
   crypto: (vs: string) => request<{ vs: string; coins: Coin[] }>(`/crypto/markets?vs=${vs.toLowerCase()}`),
+  stocks: (group: StockGroup) => request<{ group: StockGroup; quotes: Quote[] }>(`/stocks/markets?group=${group}`),
   topup: (amount: string, currency: string, coupon = '') => post<{ url: string }>('/topup', { amount, currency, coupon }),
   confirmTopup: (sessionId: string) =>
     post<{ credited: boolean; pending?: boolean; amount: string; currency: string; bonus: string; couponNote: string } & Statement>('/topup/confirm', { sessionId }),

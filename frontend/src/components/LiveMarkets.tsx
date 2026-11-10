@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { api, type Coin } from '../lib/api';
+import { api, type Coin, type StockGroup } from '../lib/api';
 import { currencyName, flag, formatPrice } from '../lib/format';
+import { GROUP_LABELS, StockBoard, formatQuote, groupBlurb, useStocks, type Filter } from './StockMarkets';
 
 const CRYPTO_EVERY_MS = 60_000;
 const FX_EVERY_MS = 600_000;
@@ -10,7 +11,7 @@ const MAJORS = ['USD', 'EUR', 'GBP', 'JPY', 'CNY', 'INR', 'CAD', 'AUD', 'CHF', '
 type Fx = { base: string; updated: string; rates: Record<string, number> };
 
 /** Calls load now and on an interval while the tab is visible, keeping the last good value. */
-function useLive<T>(load: () => Promise<T>, everyMs: number, deps: unknown[]) {
+export function useLive<T>(load: () => Promise<T>, everyMs: number, deps: unknown[]) {
   const [value, setValue] = useState<T | null>(null);
   const [at, setAt] = useState(0);
   const [failed, setFailed] = useState(false);
@@ -37,7 +38,7 @@ function useLive<T>(load: () => Promise<T>, everyMs: number, deps: unknown[]) {
   return { value, at, failed };
 }
 
-function useNow(everyMs = 1000) {
+export function useNow(everyMs = 1000) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), everyMs);
@@ -46,7 +47,7 @@ function useNow(everyMs = 1000) {
   return now;
 }
 
-function ago(at: number, now: number) {
+export function ago(at: number, now: number) {
   if (!at) return 'connecting…';
   const seconds = Math.max(0, Math.round((now - at) / 1000));
   return seconds < 60 ? `updated ${seconds}s ago` : `updated ${Math.round(seconds / 60)} min ago`;
@@ -97,7 +98,7 @@ export function Sparkline({ points, positive }: { points: number[]; positive: bo
   );
 }
 
-function Change({ value }: { value: number | null }) {
+export function Change({ value }: { value: number | null }) {
   if (value == null) return <span className="pill">–</span>;
   return <span className={`pill ${value >= 0 ? 'up' : 'down'}`}>{value >= 0 ? '▲' : '▼'} {Math.abs(value).toFixed(2)}%</span>;
 }
@@ -106,7 +107,11 @@ function Change({ value }: { value: number | null }) {
 export function Ticker() {
   const { value: coins } = useCoins('USD');
   const { value: fx } = useLive(() => api.rates('USD'), FX_EVERY_MS, []);
+  const { value: indices } = useStocks('index');
+  const { value: ai } = useStocks('ai');
   const items: { key: string; label: string; image: string; flag: string; price: string; change: number | null }[] = [
+    ...(indices ?? []).filter(q => q.symbol !== '^VIX').map(q => ({ key: q.symbol, label: q.name, image: '', flag: '📈', price: formatQuote(q, 'index'), change: q.change })),
+    ...(ai ?? []).slice(0, 8).map(q => ({ key: q.symbol, label: q.symbol, image: '', flag: '🤖', price: formatQuote(q), change: q.change })),
     ...(coins ?? []).slice(0, 15).map(c => ({ key: c.id, label: c.symbol, image: c.image, flag: '', price: formatPrice(c.price, 'USD'), change: c.change24h })),
     ...MAJORS.filter(c => c !== 'USD' && fx?.rates[c]).map(c => ({
       key: c, label: `USD/${c}`, image: '', flag: currencyFlag(c), price: fx!.rates[c].toPrecision(5), change: null,
@@ -131,12 +136,14 @@ export function Ticker() {
   );
 }
 
-type View = 'crypto' | 'fx';
-type Filter = 'all' | 'gainers' | 'losers';
+type View = StockGroup | 'crypto' | 'fx';
+const VIEWS: View[] = ['ai', 'index', 'etf', 'stock', 'commodity', 'crypto', 'fx'];
+const VIEW_LABELS: Record<View, string> = { ...GROUP_LABELS, crypto: 'Crypto', fx: 'Currencies' };
+const isStocks = (v: View): v is StockGroup => v !== 'crypto' && v !== 'fx';
 
 /** Every coin and every world currency, refreshed while the page is open. */
-export default function LiveMarkets({ home }: { home: string }) {
-  const [view, setView] = useState<View>('crypto');
+export default function LiveMarkets({ home, initial = 'ai' }: { home: string; initial?: View }) {
+  const [view, setView] = useState<View>(initial);
   const [base, setBase] = useState(home);
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<Filter>('all');
@@ -167,7 +174,8 @@ export default function LiveMarkets({ home }: { home: string }) {
       .map(code => ({ code, rate: all[code] }));
   }, [fx.value, base, q]);
 
-  const live = view === 'crypto' ? crypto : fx;
+  const stocks = useStocks(isStocks(view) ? view : 'ai');
+  const live = isStocks(view) ? stocks : view === 'crypto' ? crypto : fx;
 
   return (
     <section className="markets" id="markets">
@@ -175,24 +183,25 @@ export default function LiveMarkets({ home }: { home: string }) {
         <div>
           <h2><span className={`live-dot${live.failed ? ' off' : ''}`} /> Live markets</h2>
           <p className="muted">
-            {view === 'crypto' ? `Top ${crypto.value?.length ?? 50} cryptocurrencies by market cap` : `${rates.length || 160}+ world currencies at the mid-market rate`}
+            {isStocks(view) ? groupBlurb(view) : view === 'crypto' ? `Top ${crypto.value?.length ?? 50} cryptocurrencies by market cap` : `${rates.length || 160}+ world currencies at the mid-market rate`}
             {' · '}{live.failed && !live.value ? 'unavailable right now' : ago(live.at, now)}
           </p>
         </div>
-        <div className="tabs markets-tabs" role="tablist">
-          <button role="tab" aria-selected={view === 'crypto'} onClick={() => setView('crypto')}>Crypto</button>
-          <button role="tab" aria-selected={view === 'fx'} onClick={() => setView('fx')}>Currencies</button>
-        </div>
+      </div>
+      <div className="market-tabs" role="tablist" aria-label="Markets">
+        {VIEWS.map(v => (
+          <button key={v} role="tab" aria-selected={view === v} onClick={() => { setView(v); setQuery(''); }}>{VIEW_LABELS[v]}</button>
+        ))}
       </div>
 
       <div className="panel-tools">
-        <input type="search" placeholder={view === 'crypto' ? 'Search coins' : 'Search currency or country'} value={query} onChange={e => setQuery(e.target.value)} />
-        <label className="inline-label">Prices in
+        <input type="search" placeholder={isStocks(view) ? `Search ${VIEW_LABELS[view].toLowerCase()}` : view === 'crypto' ? 'Search coins' : 'Search currency or country'} value={query} onChange={e => setQuery(e.target.value)} />
+        {!isStocks(view) && <label className="inline-label">Prices in
           <select value={base} onChange={e => setBase(e.target.value)}>
             {currencies.map(c => <option key={c} value={c}>{c} · {currencyName(c)}</option>)}
           </select>
-        </label>
-        {view === 'crypto' && (
+        </label>}
+        {view !== 'fx' && (
           <div className="chips">
             {(['all', 'gainers', 'losers'] as Filter[]).map(f => (
               <button key={f} aria-pressed={filter === f} onClick={() => setFilter(f)}>{{ all: 'All', gainers: 'Gainers', losers: 'Losers' }[f]}</button>
@@ -203,7 +212,7 @@ export default function LiveMarkets({ home }: { home: string }) {
 
       {view === 'crypto' && crypto.vs !== base && <p className="hint">Crypto prices aren't quoted in {base}, so they're shown in US dollars.</p>}
 
-      {view === 'crypto' ? (
+      {isStocks(view) ? <StockBoard group={view} query={query} filter={filter} /> : view === 'crypto' ? (
         !crypto.value ? <SkeletonGrid /> : (
           <div className="coin-grid">
             {coins.map((coin, i) => (

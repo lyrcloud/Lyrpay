@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   confirmForgotPassword,
   confirmSignUp,
@@ -16,6 +16,7 @@ import { COUNTRIES, currencyOf, flag, guessCountry, toE164 } from '../lib/format
 import { pendingReferral } from '../lib/referral';
 import LiveMarkets, { Ticker } from './LiveMarkets';
 import Logo, { SiteFooter } from './Logo';
+import { AiPulse, MarketClocks } from './StockMarkets';
 
 type Mode = 'signin' | 'signup';
 type Step = 'form' | 'confirm' | 'reset';
@@ -33,6 +34,66 @@ function message(error: unknown) {
   if (name === 'LimitExceededException' || name === 'TooManyRequestsException') return 'Too many tries. Please wait a few minutes.';
   return message || 'Something went wrong. Please try again.';
 }
+
+/** Counts up to the number once it scrolls into view. */
+function CountUp({ to, suffix = '', decimals = 0 }: { to: number; suffix?: string; decimals?: number }) {
+  const ref = useRef<HTMLElement>(null);
+  const [value, setValue] = useState(0);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    if (matchMedia('(prefers-reduced-motion: reduce)').matches) return setValue(to);
+    let frame = 0;
+    const observer = new IntersectionObserver(([entry]) => {
+      if (!entry.isIntersecting) return;
+      observer.disconnect();
+      const start = performance.now();
+      const step = (t: number) => {
+        const p = Math.min(1, (t - start) / 1400);
+        setValue(to * (1 - Math.pow(1 - p, 3)));
+        if (p < 1) frame = requestAnimationFrame(step);
+      };
+      frame = requestAnimationFrame(step);
+    });
+    observer.observe(el);
+    return () => { observer.disconnect(); cancelAnimationFrame(frame); };
+  }, [to]);
+  return <strong ref={ref}>{value.toFixed(decimals)}{suffix}</strong>;
+}
+
+/** Fades sections in as they scroll into view. */
+function useReveal() {
+  useEffect(() => {
+    const els = document.querySelectorAll('.reveal');
+    if (!('IntersectionObserver' in window)) return els.forEach(el => el.classList.add('in'));
+    const observer = new IntersectionObserver(entries => {
+      for (const entry of entries) {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('in');
+          observer.unobserve(entry.target);
+        }
+      }
+    }, { rootMargin: '0px 0px -8% 0px' });
+    els.forEach(el => observer.observe(el));
+    return () => observer.disconnect();
+  }, []);
+}
+
+/** A soft glow that follows the pointer across the hero. */
+function spotlight(event: React.PointerEvent<HTMLElement>) {
+  const r = event.currentTarget.getBoundingClientRect();
+  event.currentTarget.style.setProperty('--sx', `${event.clientX - r.left}px`);
+  event.currentTarget.style.setProperty('--sy', `${event.clientY - r.top}px`);
+}
+
+const FEATURES = [
+  { icon: '🤖', title: 'AI shares, live', text: 'NVIDIA, Microsoft, Alphabet, AMD, Palantir and more, with a live pulse of the whole AI market.' },
+  { icon: '📊', title: 'ETFs and indices', text: 'S&P 500, Nasdaq, Nifty, Nikkei, DAX and popular funds from SPY and QQQ to AI and chip ETFs.' },
+  { icon: '🪙', title: 'Crypto and commodities', text: 'The top 50 coins by market cap, plus gold, silver, oil and copper futures.' },
+  { icon: '💱', title: '160+ currencies', text: 'Hold, send and convert at the live mid-market rate with a flat 0.5% fee.' },
+  { icon: '⚡', title: 'Pay anyone instantly', text: 'Send money to any Lyrpay user by email or mobile number in seconds.' },
+  { icon: '🎁', title: 'Rewards and gift cards', text: 'Earn for inviting friends, send gift cards and run a business account.' },
+];
 
 export default function AuthPage({ onSignedIn }: { onSignedIn: () => void }) {
   const [invited] = useState(() => !!pendingReferral());
@@ -150,16 +211,19 @@ export default function AuthPage({ onSignedIn }: { onSignedIn: () => void }) {
     setInfo('');
   };
 
+  useReveal();
+
   return (
     <div className="home">
       <Ticker />
-      <div className="auth">
+      <div className="auth hero" onPointerMove={spotlight}>
         <section className="auth-intro">
           <Logo size={44} large />
-          <h1>Money for every country, <span className="gradient-text">in every currency.</span></h1>
+          <span className="hero-badge"><span className="live-dot" /> Live: AI shares · ETFs · indices · crypto · FX</span>
+          <h1>Your money and the <span className="gradient-text">world’s markets,</span> in one place.</h1>
           <p>
-            Hold, send and convert {`160+`} currencies, top up with cards and local payment methods, and follow the crypto
-            markets from one account.
+            Hold, send and convert 160+ currencies, and follow AI shares, ETFs, world indices, crypto and commodities
+            live, from one Lyr account.
           </p>
           <ul className="auth-points">
             <li>Pay anyone on Lyrpay by email or mobile number</li>
@@ -168,11 +232,15 @@ export default function AuthPage({ onSignedIn }: { onSignedIn: () => void }) {
           <li>Gift cards, referral rewards and business accounts</li>
           </ul>
           <div className="auth-stats">
-            <div><strong>160+</strong><span>currencies</span></div>
-            <div><strong>50</strong><span>live crypto prices</span></div>
-            <div><strong>0.5%</strong><span>conversion fee</span></div>
+            <div><CountUp to={160} suffix="+" /><span>currencies</span></div>
+            <div><CountUp to={68} suffix="+" /><span>shares, ETFs and indices</span></div>
+            <div><CountUp to={50} /><span>live crypto prices</span></div>
+            <div><CountUp to={0.5} decimals={1} suffix="%" /><span>conversion fee</span></div>
           </div>
-          <a href="#markets" className="link scroll-hint">See live markets ↓</a>
+          <div className="hero-links">
+            <a href="#ai" className="button primary">AI market pulse</a>
+            <a href="#markets" className="button">All live markets ↓</a>
+          </div>
         </section>
 
         <section className="card auth-card">
@@ -263,7 +331,20 @@ export default function AuthPage({ onSignedIn }: { onSignedIn: () => void }) {
           )}
         </section>
       </div>
-      <div className="home-markets"><LiveMarkets home={currencyOf(country)} /></div>
+      <div className="home-section"><MarketClocks /></div>
+      <div className="home-section"><AiPulse /></div>
+      <div className="home-section">
+        <div className="features">
+          {FEATURES.map((f, i) => (
+            <article className="feature reveal" key={f.title} style={{ transitionDelay: `${i * 60}ms` }}>
+              <span className="feature-icon" aria-hidden="true">{f.icon}</span>
+              <h3>{f.title}</h3>
+              <p className="muted">{f.text}</p>
+            </article>
+          ))}
+        </div>
+      </div>
+      <div className="home-markets reveal"><LiveMarkets home={currencyOf(country)} /></div>
       <SiteFooter />
     </div>
   );
