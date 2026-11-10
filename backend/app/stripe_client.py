@@ -98,6 +98,11 @@ def checkout_for_payment(intent_id: str) -> dict | None:
     return sessions[0] if sessions else None
 
 
+def payment_method_configurations() -> list[dict]:
+    """The Dashboard's payment method settings: for each method, whether it's available and switched on."""
+    return _request("GET", "/payment_method_configurations", params={"limit": 20})["data"]
+
+
 def get_payment_intent(intent_id: str) -> dict:
     """A bank debit's payment: 'processing' while it's on its way, back to 'requires_payment_method' if the bank refused."""
     return _request("GET", f"/payment_intents/{intent_id}")

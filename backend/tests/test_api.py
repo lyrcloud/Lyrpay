@@ -874,3 +874,39 @@ def test_stripe_app_needs_stripes_signature_for_lyrpays_account(as_user, monkeyp
     preflight = client.options("/api/stripe-app/overview", headers={
         "Origin": "null", "Access-Control-Request-Method": "POST", "Access-Control-Request-Headers": "content-type,stripe-signature"})
     assert preflight.status_code == 204 and "stripe-signature" in preflight.headers["access-control-allow-headers"]
+
+
+def pm_config(**on):
+    return [{"is_default": True, **{k: {"available": True, "display_preference": {"value": v}} for k, v in on.items()}}]
+
+
+def test_topup_methods_follow_country_and_dashboard(as_user, monkeypatch):
+    from app import topup_methods
+
+    monkeypatch.setattr(topup_methods, "_enabled_read", 0.0)
+    monkeypatch.setattr(stripe_client, "payment_method_configurations",
+                        lambda: pm_config(upi="on", ideal="off", amazon_pay="on", us_bank_account="on"))
+    assert topup_methods.for_country("in")["local"][0] == {"type": "upi", "label": "UPI", "currency": "INR"}
+    assert not topup_methods.for_country("IN")["cardsOnly"]
+    # iDEAL is switched off in the Dashboard, so the Netherlands only gets methods open to everyone
+    nl = topup_methods.for_country("NL")
+    assert [m["type"] for m in nl["local"]] == ["amazon_pay"] and nl["cardsOnly"]
+    assert topup_methods.for_country("PK")["cardsOnly"]
+    assert [m["type"] for m in topup_methods.for_country("US")["local"]] == ["us_bank_account", "amazon_pay"]
+    # No country chosen yet: nothing claimed about cards only
+    assert not topup_methods.for_country("")["cardsOnly"]
+    alice = as_user(ALICE)
+    assert alice.get("/api/topup/methods").json()["country"] == ""
+
+
+def test_topup_methods_without_dashboard_access_claim_nothing(monkeypatch):
+    from app import topup_methods
+
+    def refused():
+        raise stripe_client.StripeError("The provided key does not have the required permissions", definitive=True)
+
+    monkeypatch.setattr(topup_methods, "_enabled", None)
+    monkeypatch.setattr(topup_methods, "_enabled_read", 0.0)
+    monkeypatch.setattr(stripe_client, "payment_method_configurations", refused)
+    pk = topup_methods.for_country("PK")
+    assert pk["local"] == [] and not pk["cardsOnly"]

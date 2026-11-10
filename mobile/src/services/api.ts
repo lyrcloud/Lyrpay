@@ -60,6 +60,12 @@ export const fetchMe = () =>
 export const sendMoney = (to: string, amount: string, currency: string, note: string) =>
   post<{ sentTo: string } & Statement>('/transfer', { to, amount, currency, note });
 
+export type TopUpMethods = {
+  country: string; cards: string[]; local: { type: string; label: string; currency: string }[]; cardsOnly: boolean;
+};
+
+export const topUpMethods = () => request<TopUpMethods>('/topup/methods');
+
 export const checkCoupon = (code: string, amount: string, currency: string) =>
   request<{ code: string; bonus: string; currency: string; description: string }>(
     `/coupons/check?${new URLSearchParams({ code, amount, currency })}`,

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { ApiError, api, type Payouts, type Statement } from '../lib/api';
-import { currencyName, formatMoney } from '../lib/format';
+import { ApiError, api, type Payouts, type Statement, type TopUpMethods } from '../lib/api';
+import { countryName, currencyName, formatMoney } from '../lib/format';
 
 type Props = {
   currencies: string[];
@@ -38,8 +38,34 @@ function useAction() {
   return { busy, error, run };
 }
 
-// Countries where Stripe offers no local wallet or bank method: only internationally enabled cards work
-const CARD_ONLY = ['PKR', 'BDT', 'LKR', 'BTN'];
+/** Ways to pay from the person's country, by the same rule for everyone: cards everywhere, plus the local methods
+ * switched on in Stripe for that country. */
+function WaysToPay({ currency, home }: { currency: string; home: string }) {
+  const [ways, setWays] = useState<TopUpMethods | null>(null);
+  useEffect(() => {
+    // Changing country also changes the home currency, so this follows it
+    api.topupMethods().then(setWays).catch(() => setWays(null));
+  }, [home]);
+  const from = ways?.country ? countryName(ways.country) : '';
+  if (ways?.cardsOnly) {
+    return (
+      <p className="hint">
+        From {from}, pay with a Visa or Mastercard debit or credit card, or Apple Pay or Google Pay. Ask your bank to
+        switch on international online payments first. Local wallets and bank transfers aren't available there yet.
+      </p>
+    );
+  }
+  if (ways?.country && ways.local.length) {
+    const local = ways.local.map(m => (m.currency && m.currency !== currency ? `${m.label} (pay in ${m.currency})` : m.label));
+    return <p className="hint">From {from}: {ways.cards.join(', ')}, and {local.join(', ')}. All through Stripe.</p>;
+  }
+  return (
+    <p className="hint">
+      Pay by card, Apple Pay, Google Pay, bank or a local payment method in your country, through Stripe.
+      {ways && !ways.country && ' Choose your country at the top of your wallet to see which ones work where you are.'}
+    </p>
+  );
+}
 
 export function AddMoney({ currencies, home, cardPayments }: Props & { cardPayments: boolean }) {
   const [amount, setAmount] = useState('');
@@ -69,10 +95,7 @@ export function AddMoney({ currencies, home, cardPayments }: Props & { cardPayme
 
   return (
     <form className="form" onSubmit={submit}>
-      <p className="hint">
-        Pay by card, Apple Pay, Google Pay, bank or a local payment method in your country, through Stripe.
-      </p>
-      {CARD_ONLY.includes(currency) && <p className="hint">Paying from Pakistan, Bangladesh, Sri Lanka or Bhutan? Use a Visa or Mastercard debit or credit card, and ask your bank to switch on international online payments first. Local wallets and bank transfers aren't available yet.</p>}
+      <WaysToPay currency={currency} home={home} />
       <div className="amount-row">
         <input inputMode="decimal" placeholder="0.00" required value={amount} onChange={e => setAmount(e.target.value)} aria-label="Amount" />
         <CurrencySelect value={currency} onChange={setCurrency} options={currencies} />

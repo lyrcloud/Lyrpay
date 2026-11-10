@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Linking, Text, TextInput } from 'react-native';
 import {
-  ApiError, Payouts, Statement, checkCoupon, convert, fetchPayouts, onboardPayouts, quote, sendMoney, startTopUp, withdraw,
+  ApiError, Payouts, Statement, TopUpMethods, checkCoupon, convert, fetchPayouts, onboardPayouts, quote, sendMoney, startTopUp,
+  topUpMethods, withdraw,
 } from '../services/api';
 import { AmountField, Button, Link, money, styles, useAction } from '../ui';
 
@@ -14,8 +15,36 @@ type Props = {
 
 const available = (balances: Record<string, string>, currency: string) => `Available: ${money(balances[currency] ?? 0, currency)}`;
 
-// Countries where Stripe offers no local wallet or bank method: only internationally enabled cards work
-const CARD_ONLY = ['PKR', 'BDT', 'LKR', 'BTN'];
+const countryName = (code: string) => {
+  try {
+    return new Intl.DisplayNames(undefined, { type: 'region' }).of(code) ?? code;
+  } catch {
+    return code; // engines without Intl.DisplayNames
+  }
+};
+
+/** Ways to pay from the person's country, by the same rule for everyone: cards everywhere, plus the local methods
+ * switched on in Stripe for that country. */
+function WaysToPay({ currency, home }: { currency: string; home: string }) {
+  const [ways, setWays] = useState<TopUpMethods | null>(null);
+  useEffect(() => {
+    topUpMethods().then(setWays).catch(() => setWays(null));
+  }, [home]);
+  const from = ways?.country ? countryName(ways.country) : '';
+  if (ways?.cardsOnly) {
+    return (
+      <Text style={styles.hint}>
+        From {from}, pay with a Visa or Mastercard debit or credit card, or Apple Pay or Google Pay. Ask your bank to switch
+        on international online payments first. Local wallets and bank transfers aren't available there yet.
+      </Text>
+    );
+  }
+  if (ways?.country && ways.local.length) {
+    const local = ways.local.map(m => (m.currency && m.currency !== currency ? `${m.label} (pay in ${m.currency})` : m.label));
+    return <Text style={styles.hint}>From {from}: {ways.cards.join(', ')}, and {local.join(', ')}. All through Stripe.</Text>;
+  }
+  return <Text style={styles.hint}>Pay by card, Apple Pay, Google Pay, bank or a local payment method, through Stripe.</Text>;
+}
 
 export function SendMoney({ balances, onStatement, onNotice }: Props) {
   const held = Object.keys(balances);
@@ -84,8 +113,7 @@ export function AddMoney({ home, onNotice, cardPayments }: Props & { cardPayment
 
   return (
     <>
-      <Text style={styles.hint}>Pay by card, Apple Pay, Google Pay, bank or a local payment method, through Stripe.</Text>
-      {CARD_ONLY.includes(currency) && <Text style={styles.hint}>Paying from Pakistan, Bangladesh, Sri Lanka or Bhutan? Use a Visa or Mastercard debit or credit card, and ask your bank to switch on international online payments first. Local wallets and bank transfers aren't available yet.</Text>}
+      <WaysToPay currency={currency} home={home} />
       <AmountField amount={amount} onAmount={setAmount} currency={currency} onCurrency={setCurrency} />
       {promoOpen ? (
         <>

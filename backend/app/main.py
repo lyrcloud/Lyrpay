@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
-from app import cards, ledger, lyrbot, mail, plaid_client, rates, rewards, stocks, stripe_app, stripe_client
+from app import cards, ledger, lyrbot, mail, plaid_client, rates, rewards, stocks, stripe_app, stripe_client, topup_methods
 from app.auth import User, current_user
 from app.money import exponent, from_minor, parse_amount, quantize
 
@@ -409,6 +409,12 @@ def coupon_check(code: str, amount: str, currency: str, user: User = Depends(cur
     currency = currency_code(currency)
     coupon, bonus = rewards.coupon_bonus(code, user.sub, currency, parse_amount(amount, currency))
     return {"code": coupon["code"], "bonus": money(bonus, currency), "currency": currency, "description": coupon.get("description", "")}
+
+
+@app.get("/api/topup/methods")
+def topup_methods_for_me(user: User = Depends(current_user)):
+    """Ways to pay a top-up from the person's country: cards everywhere, plus the local methods Stripe has switched on."""
+    return topup_methods.for_country(ledger.ensure_profile(user).get("country", ""))
 
 
 class TopUpConfirm(BaseModel):

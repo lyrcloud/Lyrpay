@@ -1,5 +1,8 @@
 import { getIdToken } from './auth';
 
+export type TopUpMethods = {
+  country: string; cards: string[]; local: { type: string; label: string; currency: string }[]; cardsOnly: boolean;
+};
 export type Profile = { name: string; email: string; phone: string; currency: string; country: string };
 
 export type Transaction = {
@@ -128,6 +131,7 @@ export const api = {
   rates: (base: string) => request<{ base: string; updated: string; rates: Record<string, number> }>(`/rates?base=${base}`),
   crypto: (vs: string) => request<{ vs: string; coins: Coin[] }>(`/crypto/markets?vs=${vs.toLowerCase()}`),
   stocks: (group: StockGroup) => request<{ group: StockGroup; quotes: Quote[] }>(`/stocks/markets?group=${group}`),
+  topupMethods: () => request<TopUpMethods>('/topup/methods'),
   topup: (amount: string, currency: string, coupon = '') => post<{ url: string }>('/topup', { amount, currency, coupon }),
   confirmTopup: (sessionId: string) =>
     post<{ credited: boolean; pending?: boolean; amount: string; currency: string; bonus: string; couponNote: string } & Statement>('/topup/confirm', { sessionId }),
