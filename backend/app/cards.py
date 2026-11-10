@@ -63,9 +63,19 @@ def issuing_live() -> bool:
     if _status and time.time() - _status[0] < STATUS_TTL_SECONDS:
         return _status[1]
     try:
-        live = bool(stripe_client.secret_key()) and bool(webhook_secret()) and stripe_client.issuing_enabled()
-    except stripe_client.StripeError:
+        if not stripe_client.secret_key():
+            live, why = False, "no Stripe secret key"
+        elif not webhook_secret():
+            live, why = False, f"no Issuing webhook secret in {WEBHOOK_SECRET_ID}"
+        else:
+            live, why = stripe_client.issuing_enabled()
+    except stripe_client.StripeError as error:
+        logger.warning("Couldn't check whether Stripe Issuing is on: %s", error)
         return _status[1] if _status else False
+    if live:
+        logger.info("Stripe Issuing is on: cards are live")
+    else:
+        logger.warning("Cards stay off: %s", why)
     _status = (time.time(), live)
     return live
 

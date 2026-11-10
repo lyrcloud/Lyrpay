@@ -188,13 +188,14 @@ def find_transfer(account_id: str, reference: str) -> dict | None:
 # Cards: Stripe Issuing makes Visa cards that spend from the Lyrpay balance (cards.py). It must be switched on for the
 # Stripe account first (Stripe reviews the business), and cardholders live in the platform's country.
 
-def issuing_enabled() -> bool:
+def issuing_enabled() -> tuple[bool, str]:
+    """(on, Stripe's reason when it refuses), e.g. Issuing not approved yet or the key lacking Issuing permissions."""
     try:
         _request("GET", "/issuing/cards", params={"limit": 1})
-        return True
+        return True, ""
     except StripeError as error:
         if error.definitive:
-            return False
+            return False, f"Stripe refused: {error}"
         raise
 
 
