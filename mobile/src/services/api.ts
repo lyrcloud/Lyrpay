@@ -9,7 +9,7 @@ export type Coin = { id: string; symbol: string; name: string; price: number; ch
 export type Transaction = {
   id: string;
   at: string;
-  kind: 'topup' | 'send' | 'receive' | 'convert' | 'withdraw' | 'giftcard' | 'redeem' | 'refund' | 'bonus' | 'card';
+  kind: 'topup' | 'send' | 'receive' | 'convert' | 'withdraw' | 'giftcard' | 'redeem' | 'refund' | 'bonus' | 'card' | 'payment';
   currency: string;
   amount: string;
   counterparty?: string;

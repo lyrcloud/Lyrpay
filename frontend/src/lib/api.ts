@@ -11,7 +11,7 @@ export type Profile = { name: string; email: string; phone: string; currency: st
 export type Transaction = {
   id: string;
   at: string;
-  kind: 'topup' | 'send' | 'receive' | 'convert' | 'withdraw' | 'giftcard' | 'redeem' | 'refund' | 'bonus' | 'card';
+  kind: 'topup' | 'send' | 'receive' | 'convert' | 'withdraw' | 'giftcard' | 'redeem' | 'refund' | 'bonus' | 'card' | 'payment';
   currency: string;
   amount: string;
   status?: 'pending' | 'paid' | 'failed';
@@ -52,6 +52,22 @@ export type Rewards = {
   points: Points;
   giftCards: GiftCard[];
   limits: { giftMinUsd: string; giftMaxUsd: string };
+};
+
+export type Checkout = {
+  id: string; merchant: string; amount: string; currency: string; description: string;
+  status: 'pending' | 'paid' | 'expired' | 'cancelled' | 'refunded' | 'partially_refunded';
+  expires: string; balance: string; enough: boolean; returnUrl: string; cancelUrl: string;
+};
+
+export type Merchant = {
+  id: string; name: string; webhookUrl: string; returnOrigins: string[]; active: boolean; keyHint: string; created: string;
+  balances: Record<string, string>;
+};
+
+export type MerchantPayment = {
+  id: string; merchant: string; reference: string; status: string; amount: string; currency: string; refunded: string;
+  created: string; payerName: string; callbackError: string;
 };
 
 export type Points = {
@@ -168,6 +184,9 @@ export const api = {
   claimReferral: (code: string) => post<{ referrer: string }>('/referral/claim', { code }),
   buyGiftCard: (order: { amount: string; currency: string; toEmail: string; toName: string; message: string }) =>
     post<{ card: GiftCard; emailed: boolean } & Statement>('/giftcards', order),
+  checkout: (id: string) => request<Checkout>(`/pay/${id}`),
+  approveCheckout: (id: string) => post<{ redirect: string }>(`/pay/${id}/approve`, {}),
+  cancelCheckout: (id: string) => post<{ redirect: string }>(`/pay/${id}/cancel`, {}),
   redeemPoints: (points: number) => post<{ usd: string } & Statement>('/points/redeem', { points }),
   redeemGiftCard: (code: string) => post<{ amount: string; currency: string; from: string } & Statement>('/giftcards/redeem', { code }),
   cancelGiftCard: (code: string) => post<{ amount: string; currency: string } & Statement>('/giftcards/cancel', { code }),
@@ -184,6 +203,9 @@ export const api = {
   createCoupon: (coupon: Partial<Coupon>) => post<{ coupon: Coupon }>('/admin/coupons', coupon),
   toggleCoupon: (code: string, active: boolean) =>
     request<{ coupon: Coupon }>(`/admin/coupons/${encodeURIComponent(code)}`, { method: 'PATCH', body: JSON.stringify({ active }) }),
+  adminMerchants: () => request<{ merchants: Merchant[]; payments: MerchantPayment[] }>('/admin/merchants'),
+  saveMerchant: (body: Record<string, unknown>) =>
+    post<Merchant & { secretKey?: string; webhookSecret?: string }>('/admin/merchants', body),
   adminBusinesses: () => request<{ businesses: BusinessApplication[] }>('/admin/businesses'),
   reviewBusiness: (sub: string, status: 'approved' | 'rejected', note: string) =>
     post<{ business: Business }>(`/admin/businesses/${encodeURIComponent(sub)}/review`, { status, note }),

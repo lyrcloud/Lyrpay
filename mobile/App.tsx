@@ -10,7 +10,7 @@ import { isSignedIn, signOut } from './src/services/auth';
 import { Tabs, money, styles } from './src/ui';
 
 const KIND_LABEL: Record<Transaction['kind'], string> = {
-  topup: 'Added money', send: 'Sent', receive: 'Received', convert: 'Converted', withdraw: 'Withdrew to bank',
+  topup: 'Added money', payment: 'Paid', send: 'Sent', receive: 'Received', convert: 'Converted', withdraw: 'Withdrew to bank',
   giftcard: 'Gift card', redeem: 'Redeemed gift card', refund: 'Refund', bonus: 'Bonus', card: 'Card payment',
 };
 

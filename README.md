@@ -161,6 +161,34 @@ reports the payment PAID, at most once. Cash and bank payments stay pending unti
    With live keys, add `"admins_only":true` to try them before customers see them. Changes reach the site within
    5 minutes, no redeploy.
 
+### Pay with Lyrpay (Lyrtrip, Lyrshop, Lyrsoft, Lyrcloud)
+
+The Lyr apps can take payments from Lyrpay balances (`backend/app/merchants.py`). The customer approves on
+`lyrpay.com/pay/<id>`, signed in with the same Lyr account; the money moves to the app's own Lyrpay account in one
+transaction, and refunds go straight back to the customer's balance.
+
+1. In `lyrpay.com/#admin` > Lyr apps, add the app (id, name, the sites customers return to, its callback address).
+   Copy the secret key and callback secret shown once into the app's settings (`LYRPAY_SECRET_KEY`,
+   `LYRPAY_WEBHOOK_SECRET`).
+2. From the app's server:
+
+   ```bash
+   curl https://lyrpay.com/api/v1/payments -H "Authorization: Bearer $LYRPAY_SECRET_KEY" \
+     -H "Content-Type: application/json" -d '{"amount":"84.00","currency":"USD","reference":"BK-1001",
+     "description":"Hotel in Lisbon, 2 nights","returnUrl":"https://www.lyrtrip.com/booking/success",
+     "cancelUrl":"https://www.lyrtrip.com/booking/cancel"}'
+   ```
+
+   Send the customer to the returned `url`. One payment per `reference`: a retry returns the same payment. Optional:
+   `customerEmail` (only that Lyr account may pay), `expiresInMinutes` (5 to 1440, default 30), `metadata`.
+3. The customer comes back to `returnUrl?lyrpay_payment=<id>&lyrpay_status=paid` (or the cancel URL). Don't trust
+   the query string: confirm with `GET /api/v1/payments/<id>` (`status` is `pending`, `paid`, `expired`, `cancelled`,
+   `partially_refunded` or `refunded`), or wait for the callback.
+4. Callbacks: `POST` to the app's callback address, `{"type": "payment.paid" | "payment.refunded", "payment": {...}}`,
+   signed `Lyrpay-Signature: t=<unix>,v1=<hex HMAC-SHA256 of "<t>.<raw body>" with the callback secret>`. Answer 2xx;
+   anything else is retried every 15 minutes for about half a day.
+5. Refunds: `POST /api/v1/payments/<id>/refund`, all of it or `{"amount": "20.00"}`, from the app's Lyrpay balance.
+
 ### Withdrawals in any currency through Wise
 
 With a Wise token saved, the withdraw form offers "Any currency · Wise" next to Stripe/Plaid. The person picks a

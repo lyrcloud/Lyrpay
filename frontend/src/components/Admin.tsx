@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, type AdminOverview, type Transaction } from '../lib/api';
 import { countryName, flag, formatDate, formatMoney } from '../lib/format';
+import AdminApps from './AdminApps';
 import { Businesses, Coupons, Settings } from './AdminRewards';
 
 const REFRESH_MS = 60_000;
@@ -16,6 +17,7 @@ const KIND: Record<Transaction['kind'], { label: string; color: string }> = {
   refund: { label: 'Refunded', color: 'var(--muted)' },
   bonus: { label: 'Bonuses', color: 'var(--c4)' },
   card: { label: 'Card payments', color: 'var(--c2)' },
+  payment: { label: 'Lyr app payments', color: 'var(--c5)' },
 };
 
 // The second half of money already counted (a transfer's receive, a gift card's redeem or refund)
@@ -120,7 +122,7 @@ function KindBreakdown({ byKind }: { byKind: AdminOverview['byKind'] }) {
 
 type SortKey = 'created' | 'name' | 'heldUsd' | 'country';
 
-type Section = 'overview' | 'coupons' | 'businesses' | 'settings';
+type Section = 'overview' | 'coupons' | 'businesses' | 'settings' | 'apps';
 
 export default function Admin() {
   const [section, setSection] = useState<Section>('overview');
@@ -128,9 +130,9 @@ export default function Admin() {
   return (
     <div className="admin">
       <nav className="admin-nav" aria-label="Admin sections">
-        {(['overview', 'coupons', 'businesses', 'settings'] as Section[]).map(s => (
+        {(['overview', 'coupons', 'businesses', 'settings', 'apps'] as Section[]).map(s => (
           <button key={s} aria-current={section === s} onClick={() => setSection(s)}>
-            {{ overview: 'Overview', coupons: 'Promo codes', businesses: 'Businesses', settings: 'Rewards settings' }[s]}
+            {{ overview: 'Overview', coupons: 'Promo codes', businesses: 'Businesses', settings: 'Rewards settings', apps: 'Lyr apps' }[s]}
             {s === 'businesses' && waiting > 0 && <span className="count">{waiting}</span>}
           </button>
         ))}
@@ -139,6 +141,7 @@ export default function Admin() {
       {section === 'coupons' && <Coupons />}
       {section === 'businesses' && <Businesses />}
       {section === 'settings' && <Settings />}
+      {section === 'apps' && <AdminApps />}
     </div>
   );
 }

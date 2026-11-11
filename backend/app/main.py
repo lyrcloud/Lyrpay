@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
-from app import cards, dlocal_client, ledger, lyrbot, mail, paypal_client, plaid_client, rates, rewards, stocks, stripe_app, stripe_client, topup_methods, wise_client
+from app import cards, dlocal_client, ledger, merchants, lyrbot, mail, paypal_client, plaid_client, rates, rewards, stocks, stripe_app, stripe_client, topup_methods, wise_client
 from app.auth import User, current_user
 from app.money import exponent, from_minor, parse_amount, quantize
 
@@ -59,6 +59,11 @@ async def stripe_app_cors(request: Request, call_next):
 @app.exception_handler(ValueError)
 def value_error(_: Request, error: ValueError):
     return JSONResponse(status_code=400, content={"detail": str(error)})
+
+
+@app.exception_handler(merchants.MerchantError)
+def merchant_error(_: Request, error: merchants.MerchantError):
+    return JSONResponse(status_code=error.status, content={"detail": str(error)})
 
 
 @app.exception_handler(cards.CardError)
@@ -1343,6 +1348,59 @@ def my_rewards(user: User = Depends(current_user)):
         "giftCards": rewards.gift_cards_bought(user.sub),
         "limits": {"giftMinUsd": str(rewards.GIFT_MIN_USD), "giftMaxUsd": str(rewards.GIFT_MAX_USD)},
     }
+
+
+# ── Pay with Lyrpay: the Lyr apps take payments from Lyrpay balances (merchants.py) ──
+
+def merchant_auth(authorization: str = Header(default="")) -> dict:
+    return merchants.authenticate(authorization)
+
+
+@app.post("/api/v1/payments")
+def merchant_create_payment(body: dict, merchant: dict = Depends(merchant_auth)):
+    """An app opens a payment: {amount, currency, reference, description, returnUrl, cancelUrl, customerEmail?,
+    expiresInMinutes?, metadata?}. Send the customer to the url it returns."""
+    return merchants.create_payment(merchant, body, parse_amount, currency_code)
+
+
+@app.get("/api/v1/payments/{payment_id}")
+def merchant_get_payment(payment_id: str, merchant: dict = Depends(merchant_auth)):
+    return merchants.public_payment(merchants.for_merchant(merchant, payment_id))
+
+
+@app.post("/api/v1/payments/{payment_id}/refund")
+def merchant_refund(payment_id: str, body: dict | None = None, merchant: dict = Depends(merchant_auth)):
+    """Refund all of it, or {"amount": "..."} of it, to the customer's Lyrpay balance."""
+    return merchants.refund(merchant, merchants.for_merchant(merchant, payment_id), (body or {}).get("amount"), parse_amount)
+
+
+@app.get("/api/pay/{payment_id}")
+def checkout_page(payment_id: str, user: User = Depends(current_user)):
+    ledger.ensure_profile(user)
+    return merchants.checkout_view(merchants.get_payment(payment_id), user.sub)
+
+
+@app.post("/api/pay/{payment_id}/approve")
+def checkout_approve(payment_id: str, user: User = Depends(current_user)):
+    profile = ledger.ensure_profile(user)
+    redirect = merchants.approve(merchants.get_payment(payment_id), user.sub, profile.get("name") or user.name, user.email)
+    return {"redirect": redirect, **statement(user.sub)}
+
+
+@app.post("/api/pay/{payment_id}/cancel")
+def checkout_cancel(payment_id: str, user: User = Depends(current_user)):
+    return {"redirect": merchants.cancel(merchants.get_payment(payment_id))}
+
+
+@app.get("/api/admin/merchants")
+def admin_merchants(_: User = Depends(admin_user)):
+    return {"merchants": merchants.merchants(), "payments": merchants.recent_payments()}
+
+
+@app.post("/api/admin/merchants")
+def admin_save_merchant(body: dict, admin: User = Depends(admin_user)):
+    """Make or change a merchant; a new one (or rotate: true) returns its secret key and webhook secret, once."""
+    return merchants.save_merchant(body, admin.email)
 
 
 class PointsRedeem(BaseModel):
