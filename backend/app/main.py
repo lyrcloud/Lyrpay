@@ -806,11 +806,17 @@ def convert(body: Convert, user: User = Depends(current_user)):
     if source == target:
         raise ValueError("Pick two different currencies.")
     amount = parse_amount(body.amount, source)
-    applied, received = conversion(source, target, amount, fee_for(user))
+    fee = fee_for(user)
+    applied, received = conversion(source, target, amount, fee)
     if received <= 0:
         raise ValueError("That amount is too small to convert.")
     try:
-        ledger.convert(user.sub, source, amount, target, received, applied)
+        fee_usd = rewards.usd_value(amount, source) * fee / 10000
+    except KeyError:
+        fee_usd = Decimal(0)
+    earned = rewards.fee_reward_writes(user.sub, ledger.ensure_profile(user), fee_usd)
+    try:
+        ledger.convert(user.sub, source, amount, target, received, applied, earned)
     except ledger.InsufficientFunds:
         raise HTTPException(status_code=409, detail=f"You don't have enough {source}.")
     return {"receive": money(received, target), **statement(user.sub)}
@@ -1333,9 +1339,20 @@ def my_rewards(user: User = Depends(current_user)):
     return {
         "referral": rewards.referral_summary(profile, mail.SITE_URL),
         "referredBy": bool(profile.get("referredBy")),
+        "points": rewards.points_summary(profile, {tx["kind"] for tx in ledger.transactions(user.sub, 500)}),
         "giftCards": rewards.gift_cards_bought(user.sub),
         "limits": {"giftMinUsd": str(rewards.GIFT_MIN_USD), "giftMaxUsd": str(rewards.GIFT_MAX_USD)},
     }
+
+
+class PointsRedeem(BaseModel):
+    points: int
+
+
+@app.post("/api/points/redeem")
+def redeem_points(body: PointsRedeem, user: User = Depends(current_user)):
+    usd = rewards.redeem_points(user.sub, body.points)
+    return {"usd": money(usd, "USD"), **statement(user.sub)}
 
 
 class ReferralClaim(BaseModel):

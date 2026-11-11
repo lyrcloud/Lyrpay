@@ -251,11 +251,13 @@ def fail_topup(tx: dict):
         pass  # already settled by the sweep or another request
 
 
-def convert(sub: str, source: str, amount: Decimal, target: str, received: Decimal, rate: Decimal):
+def convert(sub: str, source: str, amount: Decimal, target: str, received: Decimal, rate: Decimal, extra: list | None = None):
+    """extra: writes that happen with the conversion or not at all (the points it earns)."""
     _transact([
         _debit(sub, source, amount),
         _credit(sub, target, received),
         _put(_tx_item(sub, "convert", source, -amount, toCurrency=target, toAmount=received, rate=rate)),
+        *(extra or []),
     ], InsufficientFunds())
 
 

@@ -1,9 +1,15 @@
-"""Gift cards, promo codes (coupons), referrals and business accounts.
+"""Gift cards, promo codes (coupons), referrals and affiliate commission, points, tiers and badges, and business
+accounts: the rewards Lyrtrip and Lyrshop have, fitted to a wallet.
 
 Gift cards are bought from a balance and redeemed into one, so they only move money people already hold. Promo codes
 and referral bonuses add money Lyrpay pays for, so the admin sets them: a code gives a bonus on a top-up, within the
 limits it was made with; a referral pays the bonuses in settings once the friend's first top-up is paid. Business
 accounts are approved by the admin and then convert at the business fee and can pay many people at once.
+
+Points come out of what Lyrpay earns, its conversion fee, never out of top-ups (which cost Lyrpay the card fee and
+could be looped): a conversion earns pointsPerFeeUsd points per dollar of fee, and the person who referred them earns
+affiliatePercent of that fee as points, on every conversion, for good. 100 points are worth $1 and are redeemed into
+the USD balance. Tiers follow lifetime points, like Lyrtrip's and Lyrshop's.
 """
 import re
 import secrets
@@ -30,9 +36,25 @@ BUSINESS_STATUSES = ("pending", "approved", "rejected")
 MONTHLY_VOLUMES = ("under-10k", "10k-100k", "100k-1m", "over-1m")
 
 DEFAULT_SETTINGS = {"referrerBonusUsd": Decimal("5"), "friendBonusUsd": Decimal("0"),
-                    "referralMinTopupUsd": Decimal("20"), "businessFeeBps": Decimal("25")}
+                    "referralMinTopupUsd": Decimal("20"), "businessFeeBps": Decimal("25"),
+                    "pointsPerFeeUsd": Decimal("10"), "affiliatePercent": Decimal("20")}
 SETTING_LIMITS = {"referrerBonusUsd": (0, 100), "friendBonusUsd": (0, 100), "referralMinTopupUsd": (0, 1000),
-                  "businessFeeBps": (0, 200)}
+                  "businessFeeBps": (0, 200), "pointsPerFeeUsd": (0, 100), "affiliatePercent": (0, 50)}
+COUPON_AUDIENCES = ("everyone", "business", "personal")
+
+POINTS_PER_USD = 100
+MIN_REDEEM_POINTS = 100
+TIERS = (("Platinum", 5000), ("Gold", 2000), ("Silver", 500), ("Bronze", 100), ("Member", 0))
+# id, label, what earns it
+BADGES = (
+    ("first-topup", "First top-up", "Added money to Lyrpay"),
+    ("first-send", "First transfer", "Sent money to someone"),
+    ("globetrotter", "Globetrotter", "Converted between currencies"),
+    ("affiliate", "Affiliate", "A friend joined through your link"),
+    ("super-affiliate", "Super affiliate", "10 friends joined through your link"),
+    ("gift-giver", "Gift giver", "Sent a gift card"),
+    ("business", "Business", "An approved business account"),
+)
 
 
 class Conflict(Exception):
@@ -220,6 +242,9 @@ def clean_coupon(body: dict) -> dict:
         max_uses = int(body.get("maxUses") or 0)
     except (TypeError, ValueError):
         raise ValueError("Enter a whole number for the usage limit.")
+    audience = body.get("audience") or "everyone"
+    if audience not in COUPON_AUDIENCES:
+        raise ValueError("Choose who can use the code: everyone, business accounts or personal accounts.")
     if max_bonus <= 0 or min_topup < 0 or max_uses < 0:
         raise ValueError("The limits can't be negative.")
     expires = str(body.get("expires") or "").strip()
@@ -232,6 +257,7 @@ def clean_coupon(body: dict) -> dict:
         "code": code, "kind": kind, "value": value.quantize(Decimal("0.01")),
         "maxBonusUsd": max_bonus.quantize(Decimal("0.01")), "minTopupUsd": min_topup.quantize(Decimal("0.01")),
         "maxUses": max_uses, "oncePerPerson": body.get("oncePerPerson", True) is not False, "expires": expires,
+        "audience": audience,
         "active": body.get("active", True) is not False,
         "description": re.sub(r"\s+", " ", str(body.get("description") or "")).strip()[:120],
     }
@@ -283,6 +309,13 @@ def coupon_bonus(raw_code: str, sub: str, currency: str, amount: Decimal) -> tup
         raise ValueError("That promo code has expired.")
     if coupon["maxUses"] and coupon["uses"] >= coupon["maxUses"]:
         raise ValueError("That promo code has been fully used.")
+    audience = coupon.get("audience") or "everyone"
+    if audience != "everyone":
+        business = is_business(ledger.get_item(f"USER#{sub}", "PROFILE") or {})
+        if audience == "business" and not business:
+            raise ValueError("That promo code is for business accounts.")
+        if audience == "personal" and business:
+            raise ValueError("That promo code is for personal accounts.")
     if coupon.get("oncePerPerson") and ledger.get_item(f"COUPON#{code}", f"USED#{sub}"):
         raise ValueError("You've already used that promo code.")
     try:
@@ -422,6 +455,83 @@ def referral_summary(profile: dict, site_url: str) -> dict:
         "referrerBonusUsd": str(values["referrerBonusUsd"]), "friendBonusUsd": str(values["friendBonusUsd"]),
         "minTopupUsd": str(values["referralMinTopupUsd"]),
     }
+
+
+# ── Points, affiliate commission, tiers and badges ────────────────────────────
+
+def fee_reward_writes(sub: str, profile: dict, fee_usd: Decimal) -> list:
+    """Writes that go in the same transaction as a conversion: the person's points on the fee they paid, and their
+    referrer's affiliate commission on it. Points are whole; fractions are dropped."""
+    if fee_usd <= 0:
+        return []
+    values = settings()
+    own = int(fee_usd * values["pointsPerFeeUsd"])
+    commission = int(fee_usd * values["affiliatePercent"])  # percent of the fee, in points (100 points = $1)
+    items = [{"Update": {
+        "TableName": TABLE_NAME, "Key": {"pk": f"USER#{sub}", "sk": "PROFILE"},
+        "UpdateExpression": "ADD pointsBalance :p, pointsLifetime :p, feesPaidUsd :f",
+        "ExpressionAttributeValues": {":p": own, ":f": fee_usd.quantize(Decimal("0.0001"))},
+    }}]
+    referrer = profile.get("referredBy")
+    if referrer and referrer != sub and commission > 0:
+        items.append({"Update": {
+            "TableName": TABLE_NAME, "Key": {"pk": f"USER#{referrer}", "sk": "PROFILE"},
+            "UpdateExpression": "ADD pointsBalance :p, pointsLifetime :p, affiliatePoints :p",
+            "ExpressionAttributeValues": {":p": commission},
+        }})
+    return items
+
+
+def tier(lifetime: int) -> str:
+    return next(name for name, at in TIERS if lifetime >= at)
+
+
+def next_tier(lifetime: int) -> dict | None:
+    above = [(name, at) for name, at in TIERS if at > lifetime]
+    return {"name": above[-1][0], "at": above[-1][1]} if above else None
+
+
+def badges(profile: dict, kinds: set) -> list[dict]:
+    signups = int(profile.get("referralSignups", 0))
+    earned = {
+        "first-topup": "topup" in kinds, "first-send": "send" in kinds, "globetrotter": "convert" in kinds,
+        "affiliate": signups >= 1, "super-affiliate": signups >= 10, "gift-giver": "giftcard" in kinds,
+        "business": is_business(profile),
+    }
+    return [{"id": key, "label": label, "description": text, "earned": earned[key]} for key, label, text in BADGES]
+
+
+def points_summary(profile: dict, kinds: set) -> dict:
+    balance, lifetime = int(profile.get("pointsBalance", 0)), int(profile.get("pointsLifetime", 0))
+    values = settings()
+    return {
+        "balance": balance, "lifetime": lifetime, "valueUsd": str(Decimal(balance) / POINTS_PER_USD),
+        "tier": tier(lifetime), "nextTier": next_tier(lifetime), "badges": badges(profile, kinds),
+        "affiliatePoints": int(profile.get("affiliatePoints", 0)), "minRedeem": MIN_REDEEM_POINTS,
+        "pointsPerFeeUsd": str(values["pointsPerFeeUsd"]), "affiliatePercent": str(values["affiliatePercent"]),
+    }
+
+
+def redeem_points(sub: str, points) -> Decimal:
+    """Turn points into US dollars on the balance (100 points = $1). Returns the dollars credited."""
+    try:
+        points = int(points)
+    except (TypeError, ValueError):
+        raise ValueError("Enter a whole number of points.")
+    if points < MIN_REDEEM_POINTS:
+        raise ValueError(f"Redeem at least {MIN_REDEEM_POINTS} points.")
+    usd = (Decimal(points) / POINTS_PER_USD).quantize(Decimal("0.01"))
+    _transact([
+        {"Update": {
+            "TableName": TABLE_NAME, "Key": {"pk": f"USER#{sub}", "sk": "PROFILE"},
+            "UpdateExpression": "SET pointsBalance = pointsBalance - :p, pointsRedeemed = if_not_exists(pointsRedeemed, :zero) + :p",
+            "ConditionExpression": "pointsBalance >= :p",
+            "ExpressionAttributeValues": {":p": points, ":zero": 0},
+        }},
+        _credit(sub, "USD", usd),
+        _put(_tx_item(sub, "bonus", "USD", usd, counterparty=f"{points:,} points redeemed")),
+    ], Conflict("You don't have that many points."))
+    return usd
 
 
 # ── Business accounts ─────────────────────────────────────────────────────────

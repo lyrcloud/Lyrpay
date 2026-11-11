@@ -49,16 +49,29 @@ export type Rewards = {
     referrerBonusUsd: string; friendBonusUsd: string; minTopupUsd: string;
   };
   referredBy: boolean;
+  points: Points;
   giftCards: GiftCard[];
   limits: { giftMinUsd: string; giftMaxUsd: string };
 };
 
+export type Points = {
+  balance: number; lifetime: number; valueUsd: string; tier: string; nextTier: { name: string; at: number } | null;
+  badges: { id: string; label: string; description: string; earned: boolean }[];
+  affiliatePoints: number; minRedeem: number; pointsPerFeeUsd: string; affiliatePercent: string;
+};
+
+export type CouponAudience = 'everyone' | 'business' | 'personal';
+
 export type Coupon = {
   code: string; kind: 'percent' | 'fixed'; value: string; maxBonusUsd: string; minTopupUsd: string; maxUses: number;
   uses: number; oncePerPerson: boolean; expires: string; active: boolean; description: string; created: string;
+  audience?: CouponAudience;
 };
 
-export type RewardSettings = { referrerBonusUsd: string; friendBonusUsd: string; referralMinTopupUsd: string; businessFeeBps: number };
+export type RewardSettings = {
+  referrerBonusUsd: string; friendBonusUsd: string; referralMinTopupUsd: string; businessFeeBps: number;
+  pointsPerFeeUsd: string; affiliatePercent: string;
+};
 
 export type BusinessApplication = Business & { sub: string; name: string; email: string; phone: string };
 
@@ -155,6 +168,7 @@ export const api = {
   claimReferral: (code: string) => post<{ referrer: string }>('/referral/claim', { code }),
   buyGiftCard: (order: { amount: string; currency: string; toEmail: string; toName: string; message: string }) =>
     post<{ card: GiftCard; emailed: boolean } & Statement>('/giftcards', order),
+  redeemPoints: (points: number) => post<{ usd: string } & Statement>('/points/redeem', { points }),
   redeemGiftCard: (code: string) => post<{ amount: string; currency: string; from: string } & Statement>('/giftcards/redeem', { code }),
   cancelGiftCard: (code: string) => post<{ amount: string; currency: string } & Statement>('/giftcards/cancel', { code }),
   business: () => request<{ business: Business | null; feeBps: number; standardFeeBps: number; businessFeeBps: number; bulkMax: number }>('/business'),

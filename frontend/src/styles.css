@@ -295,6 +295,18 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .referral-stats div { display: flex; flex-direction: column; padding: 12px 14px; border-radius: 12px; background: var(--surface-2); }
 .referral-stats strong, .referral-stats .link { font-size: 1.3rem; letter-spacing: -0.01em; text-align: left; }
 .referral-stats span { color: var(--muted); font-size: 0.8rem; }
+.points-card { display: grid; gap: 12px; }
+.points-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
+.points-head h2 { margin: 6px 0 2px; font-size: 1.8rem; letter-spacing: -0.02em; }
+.badge.tier { background: var(--surface-2); color: var(--text); }
+.badge.tier-bronze { background: color-mix(in srgb, #c47a3a 22%, transparent); color: #c47a3a; }
+.badge.tier-silver { background: color-mix(in srgb, #8a94a6 26%, transparent); color: #8a94a6; }
+.badge.tier-gold { background: color-mix(in srgb, #d4a017 24%, transparent); color: #b8890f; }
+.badge.tier-platinum { background: color-mix(in srgb, #6c7cff 22%, transparent); color: #6c7cff; }
+.badges { list-style: none; margin: 4px 0 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; }
+.badges li { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: 12px; background: var(--surface-2); opacity: 0.55; }
+.badges li.earned { opacity: 1; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--brand, #6c7cff) 40%, transparent); }
+.badges li span { color: var(--muted); font-size: 0.8rem; }
 
 .giftcard { --shine-x: 30%; --shine-y: 20%; position: relative; overflow: hidden; aspect-ratio: 1.586; width: 100%; max-width: 380px; border-radius: 18px; padding: 20px 22px; color: #fff; display: flex; flex-direction: column; justify-content: space-between; box-shadow: 0 18px 40px rgb(40 30 120 / 0.28); transition: transform 0.15s ease-out, box-shadow 0.3s ease; will-change: transform; user-select: none; }
 .giftcard::before { content: ''; position: absolute; inset: 0; background: radial-gradient(circle at var(--shine-x) var(--shine-y), rgb(255 255 255 / 0.32), transparent 45%); pointer-events: none; }

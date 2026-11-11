@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { api, type BusinessApplication, type Coupon, type RewardSettings } from '../lib/api';
+import { api, type BusinessApplication, type Coupon, type CouponAudience, type RewardSettings } from '../lib/api';
 import { countryName, flag, formatDate, formatMoney } from '../lib/format';
 
 function useLoad<T>(load: () => Promise<T>) {
@@ -10,11 +10,12 @@ function useLoad<T>(load: () => Promise<T>) {
   return { data, error, reload, setError };
 }
 
-const EMPTY_COUPON = { code: '', kind: 'percent' as Coupon['kind'], value: '10', maxBonusUsd: '20', minTopupUsd: '10', maxUses: '100', oncePerPerson: true, expires: '', description: '' };
+const EMPTY_COUPON = { code: '', kind: 'percent' as Coupon['kind'], value: '10', maxBonusUsd: '20', minTopupUsd: '10', maxUses: '100', oncePerPerson: true, expires: '', description: '', audience: 'everyone' as CouponAudience };
 
 function couponSummary(c: Coupon) {
   const bonus = c.kind === 'percent' ? `${Number(c.value)}% bonus, up to ${formatMoney(c.maxBonusUsd, 'USD')}` : `${formatMoney(c.value, 'USD')} bonus`;
-  return `${bonus} on top-ups of ${formatMoney(c.minTopupUsd, 'USD')}+`;
+  const who = c.audience === 'business' ? ' · business accounts only' : c.audience === 'personal' ? ' · personal accounts only' : '';
+  return `${bonus} on top-ups of ${formatMoney(c.minTopupUsd, 'USD')}+${who}`;
 }
 
 export function Coupons() {
@@ -73,6 +74,13 @@ export function Coupons() {
             <label>Expires<input type="date" value={form.expires} onChange={set('expires')} /></label>
             <label className="check"><input type="checkbox" checked={form.oncePerPerson} onChange={set('oncePerPerson')} /> Once per person</label>
           </div>
+          <label>Who can use it
+            <select value={form.audience} onChange={set('audience')}>
+              <option value="everyone">Everyone</option>
+              <option value="business">Business accounts only (B2B)</option>
+              <option value="personal">Personal accounts only</option>
+            </select>
+          </label>
           <label>Description<input value={form.description} onChange={set('description')} placeholder="Shown to people when they use it" maxLength={120} /></label>
           {error && <p className="error">{error}</p>}
           <button className="button primary" disabled={busy}>{busy ? 'Creating…' : 'Create promo code'}</button>
@@ -211,7 +219,7 @@ export function Settings() {
   if (!data) return <section className="card">{error ? <p className="error">{error}</p> : <p className="empty">Loading…</p>}</section>;
   return (
     <section className="card settings-card">
-      <h2>Referrals and business pricing</h2>
+      <h2>Referrals, points and business pricing</h2>
       <form className="form" onSubmit={save}>
         <div className="two-col">
           <label>Bonus to the person who refers (USD)<input inputMode="decimal" value={form.referrerBonusUsd ?? ''} onChange={set('referrerBonusUsd')} /></label>
@@ -221,6 +229,11 @@ export function Settings() {
           <label>Friend's first top-up must be at least (USD)<input inputMode="decimal" value={form.referralMinTopupUsd ?? ''} onChange={set('referralMinTopupUsd')} /></label>
           <label>Business conversion fee (basis points, 100 = 1%)<input inputMode="numeric" value={form.businessFeeBps ?? ''} onChange={set('businessFeeBps')} /></label>
         </div>
+        <div className="two-col">
+          <label>Points per $1 of conversion fees (100 points = $1)<input inputMode="decimal" value={form.pointsPerFeeUsd ?? ''} onChange={set('pointsPerFeeUsd')} /></label>
+          <label>Affiliate commission (% of referred friends' fees, as points)<input inputMode="decimal" value={form.affiliatePercent ?? ''} onChange={set('affiliatePercent')} /></label>
+        </div>
+        <p className="hint">Points and commission come out of conversion fees only, so they never cost more than Lyrpay earns: 10 points per fee dollar gives back 10%, and 20% commission pays referrers a fifth of their friends' fees, for good.</p>
         <p className="hint">Everyone else converts at {data.standardFeeBps / 100}%. Bonuses are paid once per referred person, after their first qualifying top-up. Set a bonus to 0 to stop paying it.</p>
         {error && <p className="error">{error}</p>}
         {saved && <p className="info">Saved. New referrals and conversions use these settings.</p>}

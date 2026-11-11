@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { api, type GiftCard, type Rewards as RewardsData, type Statement } from '../lib/api';
+import { api, type GiftCard, type Points as PointsData, type Rewards as RewardsData, type Statement } from '../lib/api';
 import { formatDate, formatMoney } from '../lib/format';
 import { LogoMark } from './Logo';
 import { CurrencySelect } from './MoneyActions';
@@ -90,6 +90,63 @@ function Referral({ data }: { data: RewardsData['referral'] }) {
         <div><strong>{formatMoney(data.earnedUsd, 'USD')}</strong><span>earned</span></div>
         <div><button className="link" onClick={() => copy(data.code)}>{copied === data.code ? 'Copied ✓' : data.code}</button><span>your code</span></div>
       </div>
+    </section>
+  );
+}
+
+function Points({ data, onStatement, onNotice, onChange }: {
+  data: PointsData; onStatement: (s: Statement) => void; onNotice: (text: string) => void; onChange: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const next = data.nextTier;
+  const progress = next ? Math.min(100, (data.lifetime / next.at) * 100) : 100;
+  const redeem = async () => {
+    setBusy(true);
+    setError('');
+    try {
+      const { usd, ...statement } = await api.redeemPoints(data.balance);
+      onStatement(statement);
+      onNotice(`${data.balance.toLocaleString()} points redeemed: ${formatMoney(usd, 'USD')} added to your balance.`);
+      onChange();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <section className="card points-card">
+      <div className="points-head">
+        <div>
+          <span className={`badge tier tier-${data.tier.toLowerCase()}`}>{data.tier}</span>
+          <h2><span className="gradient-text">{data.balance.toLocaleString()}</span> points</h2>
+          <p className="muted">Worth {formatMoney(data.valueUsd, 'USD')} · {data.lifetime.toLocaleString()} earned in total</p>
+        </div>
+        <button className="button primary" disabled={busy || data.balance < data.minRedeem} onClick={redeem}>
+          {busy ? 'Redeeming…' : `Redeem for ${formatMoney(data.valueUsd, 'USD')}`}
+        </button>
+      </div>
+      {next && (
+        <>
+          <div className="hbar"><i style={{ width: `${progress}%` }} /></div>
+          <p className="muted small">{(next.at - data.lifetime).toLocaleString()} points to {next.name}</p>
+        </>
+      )}
+      {error && <p className="error">{error}</p>}
+      <p className="hint">
+        You earn {Number(data.pointsPerFeeUsd)} points for every $1 of conversion fees, and {Number(data.affiliatePercent)}% of the fees paid by
+        friends who joined through your link, every time they convert. 100 points = $1, redeemable from {data.minRedeem} points.
+        {data.affiliatePoints > 0 && ` Your friends have earned you ${data.affiliatePoints.toLocaleString()} points so far.`}
+      </p>
+      <ul className="badges">
+        {data.badges.map(b => (
+          <li key={b.id} className={b.earned ? 'earned' : ''} title={b.description}>
+            <strong>{b.earned ? '★' : '☆'} {b.label}</strong>
+            <span>{b.description}</span>
+          </li>
+        ))}
+      </ul>
     </section>
   );
 }
@@ -250,6 +307,7 @@ export default function Rewards(props: Props) {
   return (
     <div className="rewards">
       <Referral data={data.referral} />
+      <Points data={data.points} onStatement={props.onStatement} onNotice={props.onNotice} onChange={load} />
       <div className="grid">
         <section className="card">
           <h2>Send a gift card</h2>
