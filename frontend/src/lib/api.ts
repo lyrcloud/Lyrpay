@@ -120,7 +120,17 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 /** unavailable: bank setup isn't switched on yet (Stripe Connect off). provider 'plaid': bank is the linked account's label and test is true for Plaid's sandbox (admins only) */
 export type Payouts = {
   status: 'none' | 'incomplete' | 'ready' | 'unavailable'; currency: string; provider: 'plaid' | 'stripe'; bank?: string; test?: boolean;
+  /** Withdrawals through Wise, in any currency: null while off. accounts: saved bank account labels by currency */
+  wise?: WiseInfo | null;
 };
+export type WiseInfo = { test: boolean; accounts: Record<string, string> };
+/** Wise's bank details form (docs.wise.com, account requirements): one entry per kind of account */
+export type WiseField = {
+  key: string; name: string; type: 'text' | 'select' | 'radio' | 'date'; required: boolean; example?: string;
+  validationRegexp?: string | null; minLength?: number | null; maxLength?: number | null;
+  refreshRequirementsOnChange?: boolean; valuesAllowed?: { key: string; name: string }[] | null;
+};
+export type WiseAccountType = { type: string; title: string; fields: { name: string; group: WiseField[] }[] };
 
 const post = <T>(path: string, body: unknown) => request<T>(path, { method: 'POST', body: JSON.stringify(body) });
 
@@ -176,5 +186,12 @@ export const api = {
   payouts: () => request<Payouts>('/payouts'),
   onboardPayouts: () => post<{ url: string }>('/payouts/onboard', {}),
   adminOverview: (days = 14) => request<AdminOverview>(`/admin/overview?days=${days}`),
-  withdraw: (amount: string) => post<{ withdrawn: string; currency: string; status: 'paid' | 'pending' } & Statement>('/withdraw', { amount }),
+  withdraw: (amount: string, currency = '', rail = '') =>
+    post<{ withdrawn: string; currency: string; status: 'paid' | 'pending' } & Statement>('/withdraw', { amount, currency, rail }),
+  wiseRequirements: (currency: string, details?: unknown) =>
+    post<{ currency: string; types: WiseAccountType[] }>('/wise/requirements', { currency, details: details ?? {} }),
+  wiseRecipient: (currency: string, type: string, details: Record<string, string>) =>
+    post<{ wise: WiseInfo }>('/wise/recipient', { currency, type, details }),
+  wiseQuote: (currency: string, amount: string) =>
+    request<{ currency: string; amount: string; receive: string; fee: string; notice: string }>(`/wise/quote?${new URLSearchParams({ currency, amount })}`),
 };

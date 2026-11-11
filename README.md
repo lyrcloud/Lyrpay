@@ -139,6 +139,25 @@ aws secretsmanager create-secret --name lyrpay/paypal \
 With `"env":"sandbox"` only admins (`ADMIN_EMAILS`) see PayPal, paying with sandbox buyer accounts; switch to the live
 app's keys and `"env":"live"` to offer it to everyone. Secret changes reach the backend within 5 minutes.
 
+### Withdrawals in any currency through Wise
+
+With a Wise token saved, the withdraw form offers "Any currency · Wise" next to Stripe/Plaid. The person picks a
+balance, fills in Wise's bank details form for that currency (it differs per country; Wise keeps the details, Lyrpay a
+label), and Wise pays it from Lyrpay's Wise Business balance (`source`, default USD). Wise's fee comes out of what
+arrives, shown before confirming. Lines stay pending until Wise has sent the money; a refused, unfunded, cancelled or
+returned transfer puts it back on the balance. The 15-minute sweep finishes the rest.
+
+Token: Wise > Settings > API tokens (2-step verification on, full access so it can pay transfers).
+
+```bash
+aws secretsmanager create-secret --name lyrpay/wise \
+  --secret-string '{"token":"...","env":"sandbox","source":"USD"}'
+```
+
+`"env":"sandbox"` (a token from the Wise sandbox) shows Wise to admins only; a live token with `"env":"live"`
+shows it to everyone. Keep the Wise balance in `source` funded. If Wise asks for payouts to be signed (strong customer
+authentication), add `"private_key"` (PEM) to the secret and upload the matching public key next to the token in Wise.
+
 ### Point lyrpay.com here
 
 lyrpay.com's DNS is on Cloudflare. Request an ACM certificate in us-east-1 for `lyrpay.com` and `www.lyrpay.com`, add its validation CNAMEs in Cloudflare, add the domains as CloudFront aliases, CNAME them to the distribution, then:

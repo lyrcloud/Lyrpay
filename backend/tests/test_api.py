@@ -152,7 +152,7 @@ def test_withdraw_after_onboarding(as_user, payouts_ready, monkeypatch):
     assert client.post("/api/withdraw", json={"amount": "10"}).status_code == 409  # not onboarded yet
 
     assert client.post("/api/payouts/onboard").json()["url"].endswith("acct_1")
-    assert client.get("/api/payouts").json() == {"status": "ready", "currency": "USD", "provider": "stripe"}
+    assert client.get("/api/payouts").json() == {"status": "ready", "currency": "USD", "provider": "stripe", "wise": None}
     result = client.post("/api/withdraw", json={"amount": "10"}).json()
     assert result["balances"] == {"USD": "40.00"}
     assert result["transactions"][0]["status"] == "paid"
@@ -656,14 +656,14 @@ def linked(client):
 
 def test_sandbox_plaid_is_only_for_admins(as_user, payouts_ready, plaid):
     assert as_user(ALICE).get("/api/payouts").json()["provider"] == "stripe"
-    assert as_user(ADMIN).get("/api/payouts").json() == {"status": "none", "currency": "USD", "provider": "plaid", "bank": "", "test": True}
+    assert as_user(ADMIN).get("/api/payouts").json() == {"status": "none", "currency": "USD", "provider": "plaid", "bank": "", "test": True, "wise": None}
 
 
 def test_plaid_withdrawal_is_sent_once_and_settled_when_posted(as_user, plaid, monkeypatch):
     client = as_user(ADMIN)
     assert client.post("/api/withdraw", json={"amount": "10"}).status_code == 409  # no bank yet
     linked(client)
-    assert client.get("/api/payouts").json() == {"status": "ready", "currency": "USD", "provider": "plaid", "bank": "Chase ••0000", "test": True}
+    assert client.get("/api/payouts").json() == {"status": "ready", "currency": "USD", "provider": "plaid", "bank": "Chase ••0000", "test": True, "wise": None}
     profile = ledger.get_item("USER#admin", "PROFILE")
     assert profile["bank"]["access"] == "access-1" and profile["bankLink"] == ""
 

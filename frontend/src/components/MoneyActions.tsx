@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { ApiError, api, type Payouts, type Statement, type TopUpMethods } from '../lib/api';
+import { ApiError, api, type Payouts, type Statement, type TopUpMethods, type WiseAccountType, type WiseInfo } from '../lib/api';
 import { countryName, currencyName, formatMoney } from '../lib/format';
 
 type Props = {
@@ -240,14 +240,187 @@ export function Convert({ currencies, balances, home, onStatement, onNotice }: P
   );
 }
 
-export function Withdraw({ balances, onStatement, onNotice, enabled }: Props & { enabled: boolean }) {
-  const [payouts, setPayouts] = useState<Payouts | null>(null);
-  const [amount, setAmount] = useState('');
+/** Wise form keys are dotted paths ("address.city"); Wise wants them nested when it refreshes the form */
+function nest(flat: Record<string, string>) {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(flat)) {
+    if (!value) continue;
+    const parts = key.split('.');
+    let node = out;
+    for (const part of parts.slice(0, -1)) node = (node[part] ??= {}) as Record<string, unknown>;
+    node[parts[parts.length - 1]] = value;
+  }
+  return out;
+}
+
+/** The bank details Wise needs for payouts in a currency, as Wise describes them: the form changes per country */
+function WiseBankForm({ currency, onSaved, onCancel }: { currency: string; onSaved: (wise: WiseInfo) => void; onCancel?: () => void }) {
+  const [types, setTypes] = useState<WiseAccountType[] | null>(null);
+  const [type, setType] = useState('');
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [loadError, setLoadError] = useState('');
   const { busy, error, run } = useAction();
 
+  const load = (details?: unknown) => api.wiseRequirements(currency, details).then(r => {
+    setTypes(r.types);
+    setType(current => (r.types.some(t => t.type === current) ? current : r.types[0]?.type ?? ''));
+  }).catch(err => setLoadError(err.message));
+
   useEffect(() => {
-    if (enabled) api.payouts().then(setPayouts).catch(() => setPayouts(null));
-  }, [enabled]);
+    setTypes(null);
+    setValues({});
+    setLoadError('');
+    load();
+  }, [currency]);
+
+  const chosen = types?.find(t => t.type === type);
+  const fields = chosen?.fields.flatMap(f => f.group) ?? [];
+
+  const change = (key: string, value: string, refresh?: boolean) => {
+    const next = { ...values, [key]: value };
+    setValues(next);
+    if (refresh) {
+      const { accountHolderName, ...rest } = next;
+      load({ type, accountHolderName, details: nest(rest) });
+    }
+  };
+
+  const save = run(async () => {
+    const picked: Record<string, string> = {};
+    for (const field of fields) {
+      const value = values[field.key] ?? (field.valuesAllowed?.length && field.required ? field.valuesAllowed[0].key : '');
+      if (value) picked[field.key] = value;
+    }
+    onSaved((await api.wiseRecipient(currency, type, picked)).wise);
+  });
+
+  if (loadError) return <p className="error" role="alert">{loadError}</p>;
+  if (!types) return <p className="empty">Loading Wise's form…</p>;
+  if (!types.length) return <p className="empty">Wise can't pay out in {currency} yet.</p>;
+
+  return (
+    <form className="form" onSubmit={save}>
+      <p className="hint">Your {currency} bank account. Wise keeps the details and pays it; Lyrpay only keeps a label.</p>
+      {types.length > 1 && (
+        <div className="segmented" role="group" aria-label="Kind of account">
+          {types.map(t => (
+            <button key={t.type} type="button" aria-pressed={t.type === type} onClick={() => setType(t.type)}>{t.title}</button>
+          ))}
+        </div>
+      )}
+      {fields.map(field => {
+        const value = values[field.key] ?? '';
+        const options = field.valuesAllowed ?? [];
+        return (
+          <label key={field.key}>{field.name}{field.required ? '' : ' (optional)'}
+            {options.length ? (
+              <select value={value || (field.required ? options[0].key : '')} required={field.required}
+                onChange={e => change(field.key, e.target.value, field.refreshRequirementsOnChange)}>
+                {!field.required && <option value="">—</option>}
+                {options.map(o => <option key={o.key} value={o.key}>{o.name}</option>)}
+              </select>
+            ) : (
+              <input type={field.type === 'date' ? 'date' : 'text'} value={value} required={field.required}
+                placeholder={field.example ?? ''} pattern={field.validationRegexp ?? undefined}
+                minLength={field.minLength ?? undefined} maxLength={field.maxLength ?? undefined} autoComplete="off"
+                onChange={e => change(field.key, e.target.value)}
+                onBlur={e => field.refreshRequirementsOnChange && change(field.key, e.target.value, true)} />
+            )}
+          </label>
+        );
+      })}
+      {error && <p className="error" role="alert">{error}</p>}
+      <button className="button primary" disabled={busy}>{busy ? 'Saving with Wise…' : 'Save bank account'}</button>
+      {onCancel && <button type="button" className="link" onClick={onCancel}>Cancel</button>}
+    </form>
+  );
+}
+
+/** Withdrawals through Wise: from any balance, to a bank account in that currency, after Wise's fee */
+function WiseWithdraw({ balances, onStatement, onNotice, wise, onWise }: Props & { wise: WiseInfo; onWise: (wise: WiseInfo) => void }) {
+  const held = Object.keys(balances).filter(code => Number(balances[code]) > 0);
+  const [currency, setCurrency] = useState(held.find(c => wise.accounts[c]) ?? held[0] ?? 'EUR');
+  const [amount, setAmount] = useState('');
+  const [editing, setEditing] = useState(false);
+  const [quote, setQuote] = useState<{ text: string; ok: boolean } | null>(null);
+  const { busy, error, run } = useAction();
+  const account = wise.accounts[currency];
+
+  useEffect(() => {
+    setQuote(null);
+    if (!account || !Number(amount)) return;
+    const timer = setTimeout(() => api.wiseQuote(currency, amount)
+      .then(q => setQuote({ ok: true, text: `${formatMoney(q.receive, currency)} arrives after Wise's ${formatMoney(q.fee, currency)} fee.${q.notice ? ` ${q.notice}` : ''}` }))
+      .catch(err => setQuote({ ok: false, text: err.message })), 450);
+    return () => clearTimeout(timer);
+  }, [currency, amount, account]);
+
+  const submit = run(async () => {
+    const result = await api.withdraw(amount, currency, 'wise');
+    onStatement(result);
+    onNotice(`${formatMoney(result.withdrawn, result.currency)} is on its way to your bank through Wise. Most transfers arrive within 1–2 business days.`);
+    setAmount('');
+  });
+
+  if (!held.length) return <p className="empty">Add money first, then withdraw it to your bank in any currency.</p>;
+  const picker = <CurrencySelect value={currency} onChange={code => { setCurrency(code); setEditing(false); }} options={held} />;
+  const testMode = wise.test && <p className="hint"><span className="badge soon">Test mode</span> Wise sandbox: no real money is sent.</p>;
+
+  if (!account || editing) {
+    return (
+      <div className="form">
+        {testMode}
+        <label>Withdraw in {picker}</label>
+        <WiseBankForm currency={currency} onSaved={info => { onWise(info); setEditing(false); }}
+          onCancel={account ? () => setEditing(false) : undefined} />
+      </div>
+    );
+  }
+
+  return (
+    <form className="form" onSubmit={submit}>
+      {testMode}
+      <div className="amount-row">
+        <input inputMode="decimal" placeholder="0.00" required value={amount} onChange={e => setAmount(e.target.value)} aria-label="Amount" />
+        {picker}
+      </div>
+      <p className="hint">Available: {formatMoney(balances[currency] ?? 0, currency)}. To {account}, through Wise.</p>
+      {quote && <p className={quote.ok ? 'hint' : 'error'}>{quote.text}</p>}
+      {error && <p className="error" role="alert">{error}</p>}
+      <button className="button primary" disabled={busy}>{busy ? 'Withdrawing…' : 'Withdraw'}</button>
+      <button type="button" className="link" disabled={busy} onClick={() => setEditing(true)}>Change {currency} bank account</button>
+    </form>
+  );
+}
+
+export function Withdraw(props: Props & { enabled: boolean }) {
+  const [payouts, setPayouts] = useState<Payouts | null>(null);
+  const [rail, setRail] = useState<'wise' | 'main'>('wise');
+
+  useEffect(() => {
+    api.payouts().then(setPayouts).catch(() => setPayouts(null));
+  }, [props.enabled]);
+
+  const wise = payouts?.wise;
+  if (!wise) return <MainWithdraw {...props} payouts={payouts} setPayouts={setPayouts} />;
+  return (
+    <>
+      <div className="segmented" role="group" aria-label="Withdraw with">
+        <button type="button" aria-pressed={rail === 'wise'} onClick={() => setRail('wise')}>Any currency · Wise</button>
+        <button type="button" aria-pressed={rail === 'main'} onClick={() => setRail('main')}>{payouts.currency} · {payouts.provider === 'plaid' ? 'Plaid' : 'Stripe'}</button>
+      </div>
+      {rail === 'wise'
+        ? <WiseWithdraw {...props} wise={wise} onWise={info => setPayouts({ ...payouts, wise: info })} />
+        : <MainWithdraw {...props} payouts={payouts} setPayouts={setPayouts} />}
+    </>
+  );
+}
+
+function MainWithdraw({ balances, onStatement, onNotice, enabled, payouts, setPayouts }: Props & {
+  enabled: boolean; payouts: Payouts | null; setPayouts: (payouts: Payouts | null) => void;
+}) {
+  const [amount, setAmount] = useState('');
+  const { busy, error, run } = useAction();
 
   const setUp = run(async () => {
     try {

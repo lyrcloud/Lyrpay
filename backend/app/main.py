@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
-from app import cards, ledger, lyrbot, mail, paypal_client, plaid_client, rates, rewards, stocks, stripe_app, stripe_client, topup_methods
+from app import cards, ledger, lyrbot, mail, paypal_client, plaid_client, rates, rewards, stocks, stripe_app, stripe_client, topup_methods, wise_client
 from app.auth import User, current_user
 from app.money import exponent, from_minor, parse_amount, quantize
 
@@ -755,6 +755,8 @@ def send_withdrawal(tx: dict, profile: dict) -> str:
     'paid', 'failed' (balance restored) or 'pending' (the answer is still unknown, or the bank hasn't got it yet)."""
     if tx.get("rail") == "plaid":
         return send_plaid_withdrawal(tx, profile)
+    if tx.get("rail") == "wise":
+        return send_wise_withdrawal(tx)
     account_id = profile.get("payoutAccount")
     if not account_id:
         return "pending"
@@ -799,6 +801,58 @@ def send_plaid_withdrawal(tx: dict, profile: dict) -> str:
         ledger.finish_withdrawal(tx, transfer["id"])
         return "paid"
     return "pending"
+
+
+def send_wise_withdrawal(tx: dict) -> str:
+    """Wise makes the transfer, Lyrpay pays it from its Wise balance, and the line stays pending until Wise has sent it
+    to the bank. A transfer Wise refuses, cancels or gets back puts the money back on the balance."""
+    try:
+        if not tx.get("reference"):
+            recipient = int(tx["recipient"])
+            offer = wise_client.quote(target=tx["currency"], source_amount=Decimal(str(tx["source"])), recipient=recipient)
+            # The same withdrawal always makes the same transfer (customerTransactionId), however often this runs
+            transfer = wise_client.create_transfer(recipient=recipient, quote_id=offer["id"], reference=tx["id"])
+            ledger.note_transfer(tx, str(transfer["id"]))
+        else:
+            transfer = wise_client.get_transfer(int(tx["reference"]))
+    except wise_client.WiseError as error:
+        if not error.definitive or tx.get("reference"):
+            logger.warning("Withdrawal %s: %s", tx["id"], error)
+            return "pending"
+        logger.warning("Withdrawal %s refused by Wise: %s", tx["id"], error)
+        ledger.fail_withdrawal(tx)
+        return "failed"
+    status = transfer.get("status", "")
+    if status == "incoming_payment_waiting":
+        status = fund_wise(tx, int(tx["reference"]))
+    if status in wise_client.FAILED:
+        ledger.fail_withdrawal(tx)
+        return "failed"
+    if status in wise_client.SENT:
+        ledger.finish_withdrawal(tx, tx["reference"])
+        return "paid"
+    return "pending"
+
+
+def fund_wise(tx: dict, transfer_id: int) -> str:
+    """Pay a Wise transfer from Lyrpay's Wise balance; the transfer's status afterwards."""
+    try:
+        wise_client.fund(transfer_id)
+        return "processing"
+    except wise_client.WiseError as error:
+        if not error.definitive:
+            logger.warning("Withdrawal %s: paying Wise transfer %s: %s", tx["id"], transfer_id, error)
+            return "incoming_payment_waiting"
+        # Refused. Maybe it was paid meanwhile (another request got there first): only an unpaid transfer is cancelled
+        logger.warning("Withdrawal %s: Wise wouldn't pay transfer %s from the balance: %s", tx["id"], transfer_id, error)
+        try:
+            if wise_client.get_transfer(transfer_id).get("status") != "incoming_payment_waiting":
+                return wise_client.get_transfer(transfer_id).get("status", "")
+            wise_client.cancel(transfer_id)
+            return "cancelled"
+        except wise_client.WiseError as again:
+            logger.warning("Withdrawal %s: %s", tx["id"], again)
+            return "incoming_payment_waiting"
 
 
 def settle_withdrawals(sub: str, profile: dict):
@@ -906,10 +960,44 @@ def connect_off() -> bool:
     return time.monotonic() < _connect_off_until
 
 
+def wise_payouts(email: str) -> bool:
+    """Wise withdrawals once its token is set. Sandbox only for admins, so no real balance is ever sent to a pretend bank."""
+    current = wise_client.env()
+    return current == "live" or (current == "sandbox" and bool(email) and email in ADMIN_EMAILS)
+
+
+def wise_call(call, *args, **kwargs):
+    try:
+        return call(*args, **kwargs)
+    except wise_client.WiseError as error:
+        raise HTTPException(status_code=400 if error.definitive else 502, detail=str(error))
+
+
+def wise_recipients(profile: dict) -> dict:
+    """The person's bank accounts saved with Wise, by currency, for the Wise environment in use."""
+    return {c: r for c, r in (profile.get("wiseRecipients") or {}).items() if r.get("env") == wise_client.env()}
+
+
+def wise_info(user: User, profile: dict) -> dict | None:
+    if not wise_payouts(user.email):
+        return None
+    return {"test": wise_client.env() == "sandbox", "accounts": {c: r["label"] for c, r in wise_recipients(profile).items()}}
+
+
 @app.get("/api/payouts")
 def payouts(user: User = Depends(current_user)):
     """Whether the person can withdraw yet, and in which currency."""
     profile = ledger.ensure_profile(user)
+    try:
+        return {**payouts_main(user, profile), "wise": wise_info(user, profile)}
+    except HTTPException:
+        if not wise_payouts(user.email):
+            raise
+        # Stripe unreachable or refusing: Wise still works
+        return {"status": "unavailable", "currency": "USD", "provider": "stripe", "wise": wise_info(user, profile)}
+
+
+def payouts_main(user: User, profile: dict) -> dict:
     if plaid_payouts(user.email):
         bank = link_bank(user.sub, profile)
         return {"status": "ready" if bank else "none", "currency": "USD", "provider": "plaid",
@@ -958,13 +1046,90 @@ def payouts_onboard(request: Request, body: Onboard | None = None, user: User = 
     return {"url": stripe_call(stripe_client.onboarding_link, account_id, site_origin(request))}
 
 
+class WiseForm(BaseModel):
+    currency: str
+    details: dict = {}
+
+
+@app.post("/api/wise/requirements")
+def wise_requirements(body: WiseForm, user: User = Depends(current_user)):
+    """Wise's bank details form for a currency: the kinds of account it can pay there, each with its fields. Sent
+    again with what's filled in when a field changes the rest of the form."""
+    if not wise_payouts(user.email):
+        raise HTTPException(status_code=503, detail="Wise withdrawals aren't switched on yet.")
+    currency = currency_code(body.currency)
+    return {"currency": currency, "types": wise_call(wise_client.requirements, currency, Decimal(100), body.details or None)}
+
+
+class WiseRecipient(BaseModel):
+    currency: str
+    type: str
+    details: dict
+
+
+def recipient_label(holder: str, kind: str, details: dict) -> str:
+    """A name for a saved bank account that doesn't show the full number: the holder and the last digits."""
+    numbers = [str(v) for k, v in details.items() if isinstance(v, (str, int)) and any(
+        w in k.lower() for w in ("iban", "accountnumber", "account_number", "number", "phone", "email", "clabe", "ifsc"))]
+    tail = next((n.replace(" ", "")[-4:] for n in numbers if len(n.replace(" ", "")) >= 4), "")
+    return f"{holder} · {kind.replace('_', ' ')}{f' ••{tail}' if tail else ''}"
+
+
+@app.post("/api/wise/recipient")
+def wise_recipient(body: WiseRecipient, user: User = Depends(current_user)):
+    """Save the person's bank account with Wise for withdrawals in that currency (replacing one saved before)."""
+    if not wise_payouts(user.email):
+        raise HTTPException(status_code=503, detail="Wise withdrawals aren't switched on yet.")
+    currency = currency_code(body.currency)
+    flat = {k: v for k, v in body.details.items() if isinstance(v, (str, int, float, bool))}
+    holder = str(flat.pop("accountHolderName", "") or "").strip()
+    if not holder:
+        raise ValueError("Enter the account holder's full name.")
+    if not re.match(r"^[a-z0-9_]{2,40}$", body.type):
+        raise ValueError("Choose the kind of bank account.")
+    flat.setdefault("legalType", "PRIVATE")
+    nested = wise_client.nest(flat)
+    account = wise_call(wise_client.create_recipient, currency=currency, kind=body.type, holder=holder, details=nested)
+    saved = {**(ledger.ensure_profile(user).get("wiseRecipients") or {}),
+             currency: {"id": account["id"], "label": recipient_label(holder, body.type, flat), "env": wise_client.env()}}
+    profile = ledger.update_profile(user.sub, wiseRecipients=saved)
+    return {"wise": wise_info(user, profile)}
+
+
+def wise_source_amount(amount: Decimal, currency: str) -> Decimal:
+    """What a withdrawal of `amount` in `currency` takes from Lyrpay's Wise balance, at the mid-market rate."""
+    try:
+        return quantize(amount * rates.rate(currency, wise_client.source()), wise_client.source())
+    except KeyError:
+        raise ValueError(f"Withdrawals in {currency} aren't available.")
+
+
+@app.get("/api/wise/quote")
+def wise_quote(currency: str, amount: str, user: User = Depends(current_user)):
+    """What arrives in the bank for a Wise withdrawal, after Wise's fee."""
+    if not wise_payouts(user.email):
+        raise HTTPException(status_code=503, detail="Wise withdrawals aren't switched on yet.")
+    currency = currency_code(currency)
+    value = parse_amount(amount, currency)
+    recipient = wise_recipients(ledger.ensure_profile(user)).get(currency)
+    offer = wise_call(wise_client.quote, target=currency, source_amount=wise_source_amount(value, currency),
+                      recipient=int(recipient["id"]) if recipient else None)
+    fee = quantize(offer["fee"] * rates.rate(wise_client.source(), currency), currency)
+    return {"currency": currency, "amount": money(value, currency), "receive": money(offer["receive"], currency),
+            "fee": money(fee, currency), "notice": offer["warning"]}
+
+
 class Withdraw(BaseModel):
     amount: str
+    currency: str = ""
+    rail: str = ""  # "wise" for a withdrawal through Wise, in `currency`
 
 
 @app.post("/api/withdraw")
 def withdraw(body: Withdraw, user: User = Depends(current_user)):
     profile = ledger.ensure_profile(user)
+    if body.rail == "wise":
+        return withdraw_wise(body, user, profile)
     if plaid_payouts(user.email):
         bank = plaid_bank(profile)
         if not bank:
@@ -986,6 +1151,26 @@ def withdraw(body: Withdraw, user: User = Depends(current_user)):
     outcome = send_withdrawal(tx, profile)
     if outcome == "failed":
         raise HTTPException(status_code=502, detail="The bank transfer was refused, so nothing left your balance.")
+    return {"withdrawn": money(amount, currency), "currency": currency, "status": outcome, **statement(user.sub)}
+
+
+def withdraw_wise(body: Withdraw, user: User, profile: dict) -> dict:
+    if not wise_payouts(user.email):
+        raise HTTPException(status_code=503, detail="Wise withdrawals aren't switched on yet.")
+    currency = currency_code(body.currency)
+    amount = parse_amount(body.amount, currency)
+    recipient = wise_recipients(profile).get(currency)
+    if not recipient:
+        raise HTTPException(status_code=409, detail=f"Add a bank account for {currency} first.")
+    source_amount = wise_source_amount(amount, currency)
+    try:
+        tx = ledger.start_withdrawal(user.sub, currency, amount, rail="wise", counterparty=recipient["label"],
+                                     recipient=int(recipient["id"]), source=source_amount)
+    except ledger.InsufficientFunds:
+        raise HTTPException(status_code=409, detail=f"You don't have enough {currency}.")
+    outcome = send_wise_withdrawal(tx)
+    if outcome == "failed":
+        raise HTTPException(status_code=502, detail="Wise refused the transfer, so nothing left your balance.")
     return {"withdrawn": money(amount, currency), "currency": currency, "status": outcome, **statement(user.sub)}
 
 

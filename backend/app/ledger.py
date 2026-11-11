@@ -25,7 +25,8 @@ from app.auth import User
 #   PAYPAL#<order id>     ORDER   a PayPal top-up order: sub, credit currency/amount, charge currency/value, coupon, env, capture
 #   SETTINGS              REWARDS referral bonuses and the business conversion fee, set by the admin
 # A profile can also carry referralCode, referredBy (sub), referralRewarded, and business (an application and its review),
-# payoutAccount (Stripe Connect) or bank (Plaid: access token, account id, label, env) with bankLink (a Link in progress).
+# payoutAccount (Stripe Connect) or bank (Plaid: access token, account id, label, env) with bankLink (a Link in progress),
+# and wiseRecipients {currency: {id, label, env}}: bank accounts saved with Wise for withdrawals in that currency.
 # Pending withdrawals and bank top-ups also carry queue="withdraw" or queue="topup", which puts them (and only them)
 # in the sparse "pending" index, so the scheduled sweep finds them without scanning the table.
 TABLE_NAME = os.getenv("LEDGER_TABLE", "lyrpay-ledger")
@@ -272,9 +273,11 @@ def bulk_transfer(sender_sub: str, sender_name: str, currency: str, payments: li
     _transact(items, InsufficientFunds())
 
 
-def start_withdrawal(sub: str, currency: str, amount: Decimal, rail: str = "", counterparty: str = "Bank account") -> dict:
-    """Take the amount off the balance before Stripe or Plaid (rail="plaid") moves it, so it can't be spent twice meanwhile."""
-    tx = _tx_item(sub, "withdraw", currency, -amount, counterparty=counterparty, status="pending", queue="withdraw", rail=rail)
+def start_withdrawal(sub: str, currency: str, amount: Decimal, rail: str = "", counterparty: str = "Bank account", **extra) -> dict:
+    """Take the amount off the balance before Stripe, Plaid (rail="plaid") or Wise (rail="wise") moves it, so it can't be
+    spent twice meanwhile. extra: what the rail needs to send it (Wise: recipient and source amount)."""
+    tx = _tx_item(sub, "withdraw", currency, -amount, counterparty=counterparty, status="pending", queue="withdraw", rail=rail,
+                  **extra)
     _transact([_debit(sub, currency, amount), _put(tx)], InsufficientFunds())
     return tx
 
