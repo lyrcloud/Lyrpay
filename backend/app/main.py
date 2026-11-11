@@ -420,10 +420,10 @@ def usd_charge(amount: Decimal, currency: str) -> Decimal:
     return (amount * rates.rate(currency, "USD")).quantize(Decimal("0.01"), rounding=ROUND_UP)
 
 
-def start_checkout(user: User, amount: Decimal, currency: str, origin: str, coupon: str) -> dict:
+def start_checkout(user: User, amount: Decimal, currency: str, origin: str, coupon: str, return_path: str = "/") -> dict:
     """A Stripe Checkout session for a top-up. In a currency Stripe can't charge, the person pays the US dollar
     equivalent and the wallet still gets the amount in their currency."""
-    common = {"user_sub": user.sub, "email": user.email, "origin": origin, "coupon": coupon}
+    common = {"user_sub": user.sub, "email": user.email, "origin": origin, "coupon": coupon, "return_path": return_path}
     if stripe_client.chargeable(currency):
         try:
             return stripe_client.create_checkout(amount=amount, currency=currency, **common)
@@ -1378,6 +1378,29 @@ def merchant_refund(payment_id: str, body: dict | None = None, merchant: dict = 
 def checkout_page(payment_id: str, user: User = Depends(current_user)):
     ledger.ensure_profile(user)
     return merchants.checkout_view(merchants.get_payment(payment_id), user.sub)
+
+
+@app.get("/api/pay/{payment_id}/summary")
+def checkout_summary(payment_id: str):
+    """What a Lyr app payment is for, before signing in (the sign-in page shows it, and fills in the shop's email)."""
+    return merchants.summary(merchants.get_payment(payment_id))
+
+
+@app.post("/api/pay/{payment_id}/topup")
+def checkout_topup(payment_id: str, request: Request, user: User = Depends(current_user)):
+    """Top up exactly what's missing to pay this payment, by card; Stripe brings the person back to the payment."""
+    item = merchants.get_payment(payment_id)
+    view = merchants.checkout_view(item, user.sub)
+    if view["status"] != "pending":
+        raise HTTPException(status_code=409, detail="This payment is no longer open.")
+    currency = item["currency"]
+    missing = item["amount"] - Decimal(view["balance"])
+    if missing <= 0:
+        raise ValueError("You already have enough to pay.")
+    least = (MIN_TOPUP_USD * rates.rate("USD", currency)).quantize(Decimal(1).scaleb(-exponent(currency)), rounding=ROUND_UP)
+    amount = max(missing, least).quantize(Decimal(1).scaleb(-exponent(currency)), rounding=ROUND_UP)
+    session = start_checkout(user, amount, currency, site_origin(request), "", return_path=f"/pay/{payment_id}")
+    return {"url": session["url"], "amount": money(amount, currency), "currency": currency}
 
 
 @app.post("/api/pay/{payment_id}/approve")

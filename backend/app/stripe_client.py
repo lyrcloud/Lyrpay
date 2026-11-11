@@ -76,7 +76,7 @@ def chargeable(currency: str) -> bool:
 
 
 def create_checkout(*, user_sub: str, email: str, amount: Decimal, currency: str, origin: str, coupon: str = "",
-                    credit: tuple[str, Decimal] | None = None) -> dict:
+                    credit: tuple[str, Decimal] | None = None, return_path: str = "/") -> dict:
     """credit: the currency and amount to put in the wallet, when the payment is in another currency (a currency
     Stripe can't charge, paid in US dollars)."""
     # No payment_method_types: Checkout offers every method switched on in the
@@ -91,8 +91,9 @@ def create_checkout(*, user_sub: str, email: str, amount: Decimal, currency: str
         "line_items[0][price_data][product_data][name]": "Lyrpay balance top-up",
         "metadata[user]": user_sub,
         "metadata[purpose]": "lyrpay_topup",
-        "success_url": f"{origin}/?topup={{CHECKOUT_SESSION_ID}}",
-        "cancel_url": f"{origin}/?topup=cancelled",
+        # return_path: the page to come back to (the wallet, or a Lyr app payment being topped up for)
+        "success_url": f"{origin}{return_path}?topup={{CHECKOUT_SESSION_ID}}",
+        "cancel_url": f"{origin}{return_path}?topup=cancelled",
     }
     if email:
         data["customer_email"] = email

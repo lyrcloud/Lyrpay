@@ -12,11 +12,12 @@ import {
   signInWithGoogle,
   signUp,
 } from '../lib/auth';
-import { COUNTRIES, currencyOf, flag, guessCountry, toE164 } from '../lib/format';
+import { COUNTRIES, currencyOf, flag, formatMoney, guessCountry, toE164 } from '../lib/format';
 import { pendingReferral } from '../lib/referral';
 import LiveMarkets, { Ticker } from './LiveMarkets';
 import Logo, { SiteFooter } from './Logo';
 import { AiPulse, MarketClocks } from './StockMarkets';
+import { type CheckoutSummary } from '../lib/api';
 
 type Mode = 'signin' | 'signup';
 type Step = 'form' | 'confirm' | 'reset';
@@ -95,15 +96,16 @@ const FEATURES = [
   { icon: '🎁', title: 'Rewards and gift cards', text: 'Earn for inviting friends, send gift cards and run a business account.' },
 ];
 
-export default function AuthPage({ onSignedIn }: { onSignedIn: () => void }) {
+export default function AuthPage({ onSignedIn, checkout }: { onSignedIn: () => void; checkout?: CheckoutSummary | null }) {
   const [invited] = useState(() => !!pendingReferral());
   const gift = new URLSearchParams(location.search).get('gift');
-  const [mode, setMode] = useState<Mode>(invited ? 'signup' : 'signin');
+  // Most people paying a Lyr app are new to Lyrpay: start them on Create account, with the shop's email filled in
+  const [mode, setMode] = useState<Mode>(invited || checkout ? 'signup' : 'signin');
   const [step, setStep] = useState<Step>('form');
   const [via, setVia] = useState<'email' | 'phone'>('email');
   const [country, setCountry] = useState(guessCountry);
   const [number, setNumber] = useState('');
-  const [email, setEmail] = useState('');
+  const [email, setEmail] = useState(checkout?.email ?? '');
   const [name, setName] = useState('');
   const [password, setPassword] = useState('');
   const [code, setCode] = useState('');
@@ -217,6 +219,20 @@ export default function AuthPage({ onSignedIn }: { onSignedIn: () => void }) {
     <div className="home">
       <Ticker />
       <div className="auth hero" onPointerMove={spotlight}>
+        {checkout ? (
+        <section className="auth-intro pay-intro">
+          <Logo size={44} large />
+          <p className="muted">{checkout.merchant} asks you to pay</p>
+          <h1 className="pay-amount">{formatMoney(checkout.amount, checkout.currency)}</h1>
+          {checkout.description && <p>{checkout.description}</p>}
+          <ol className="pay-steps">
+            <li><b>Create your free Lyrpay account</b>, or sign in if you have one</li>
+            <li><b>Add the amount by card</b> if your balance is short (Apple Pay and Google Pay work too)</li>
+            <li><b>Pay</b> and go straight back to {checkout.merchant}</li>
+          </ol>
+          <p className="muted small">Refunds come straight back to your Lyrpay balance. <a href={checkout.cancelUrl}>Cancel and return to {checkout.merchant}</a></p>
+        </section>
+        ) : (
         <section className="auth-intro">
           <Logo size={44} large />
           <span className="hero-badge"><span className="live-dot" /> Live: AI shares · ETFs · indices · crypto · FX</span>
@@ -242,9 +258,11 @@ export default function AuthPage({ onSignedIn }: { onSignedIn: () => void }) {
             <a href="#markets" className="button">All live markets ↓</a>
           </div>
         </section>
+        )}
 
         <section className="card auth-card">
-        {(invited || gift) && (
+        {checkout && <p className="info invite">Create a free Lyrpay account, or sign in, to pay {checkout.merchant}.</p>}
+        {!checkout && (invited || gift) && (
           <p className="info invite">{gift ? '🎁 Someone sent you a Lyrpay gift card. Sign in or create a free wallet to redeem it.' : '🎉 A friend invited you to Lyrpay. Create your free wallet to accept.'}</p>
         )}
           {step === 'form' ? (

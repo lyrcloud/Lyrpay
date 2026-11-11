@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import AuthPage from './components/AuthPage';
 import Dashboard from './components/Dashboard';
 import PayPage from './components/PayPage';
+import { api, type CheckoutSummary } from './lib/api';
 import { completeHostedSignIn, currentUser } from './lib/auth';
 import { captureReferral } from './lib/referral';
 
@@ -28,6 +29,10 @@ export default function App() {
   const [callbackError, setCallbackError] = useState('');
   const onCallback = location.pathname === '/auth/callback';
   const [payId, setPayId] = useState(pendingPay);
+  const [paySummary, setPaySummary] = useState<CheckoutSummary | null>(null);
+  useEffect(() => {
+    if (payId && !signedIn) api.checkoutSummary(payId).then(setPaySummary).catch(() => setPaySummary(null));
+  }, [payId, signedIn]);
   const leavePay = () => {
     try { sessionStorage.removeItem(PAY_KEY); } catch { /* storage unavailable */ }
     history.replaceState(null, '', '/');
@@ -55,8 +60,7 @@ export default function App() {
     return (
       <>
         {callbackError && <div className="toast toast-error page-toast" role="alert">{callbackError}</div>}
-        {payId && <div className="toast page-toast" role="status">Sign in with your Lyr account to finish paying.</div>}
-        <AuthPage onSignedIn={() => setSignedIn(true)} />
+        <AuthPage onSignedIn={() => setSignedIn(true)} checkout={payId ? paySummary : null} />
       </>
     );
   }

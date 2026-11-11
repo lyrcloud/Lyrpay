@@ -164,6 +164,8 @@ def create_payment(merchant: dict, body: dict, parse_amount, currency_code) -> d
         "returnUrl": _back_to(merchant, body.get("returnUrl"), "return address"),
         "cancelUrl": _back_to(merchant, body.get("cancelUrl") or body.get("returnUrl"), "cancel address"),
         "customerEmail": str(body.get("customerEmail") or "").strip().lower()[:200],
+        # Fills in the sign-up form on the payment page; unlike customerEmail, any Lyr account may still pay
+        "emailHint": str(body.get("email") or "").strip().lower()[:200],
         "status": "pending", "refunded": Decimal(0), "created": _now(),
         "expires": (datetime.now(timezone.utc) + timedelta(minutes=minutes)).isoformat(),
     }
@@ -224,6 +226,16 @@ def checkout_view(item: dict, sub: str) -> dict:
         "description": shown["description"], "status": shown["status"], "expires": item["expires"],
         "balance": _fmt(held, item["currency"]), "enough": held >= item["amount"], "cancelUrl": item["cancelUrl"],
         "returnUrl": _with_result(item["returnUrl"], item["id"], shown["status"]),
+    }
+
+
+def summary(item: dict) -> dict:
+    """Shown before signing in: who is asking for how much (payment ids are unguessable, like a Checkout link)."""
+    shown = public_payment(item)
+    return {
+        "id": item["id"], "merchant": item["merchantName"], "amount": shown["amount"], "currency": item["currency"],
+        "description": shown["description"], "status": shown["status"],
+        "email": item.get("customerEmail") or item.get("emailHint", ""), "cancelUrl": item["cancelUrl"],
     }
 
 

@@ -1,4 +1,5 @@
 import json
+from decimal import Decimal
 
 import httpx
 import pytest
@@ -132,3 +133,30 @@ def test_keys_and_sites_are_checked(as_user, app_key):
     assert as_app(app_key["secretKey"]).get(f"/api/v1/payments/{lyrtrip_payment['id']}").status_code == 401
     assert as_app(rotated["secretKey"]).get(f"/api/v1/payments/{lyrtrip_payment['id']}").status_code == 200
     assert as_user(ALICE).post("/api/admin/merchants", json=LYRTRIP).status_code == 403
+
+
+def test_signed_out_page_shows_the_payment_and_the_shops_email(app_key):
+    payment = open_payment(app_key["secretKey"], email="New.Shopper@Example.com")
+    shown = TestClient(main.app).get(f"/api/pay/{payment['id']}/summary").json()
+    assert (shown["merchant"], shown["amount"], shown["currency"], shown["email"]) == ("Lyrtrip", "40.00", "USD", "new.shopper@example.com")
+    assert TestClient(main.app).get("/api/pay/lpp_" + "0" * 24 + "/summary").status_code == 404
+
+
+def test_short_balance_tops_up_exactly_whats_missing_and_comes_back(as_user, monkeypatch, app_key):
+    from app import stripe_client
+    opened = {}
+
+    def create_checkout(**kwargs):
+        opened.update(kwargs)
+        return {"id": "cs_pay_1", "url": "https://checkout.stripe.com/c/cs_pay_1"}
+
+    monkeypatch.setattr(stripe_client, "create_checkout", create_checkout)
+    payment = open_payment(app_key["secretKey"])
+    top_up(as_user(ALICE), monkeypatch, "alice", "cs_mp_5", amount_total=1500)  # $15 of the $40
+    monkeypatch.setattr(stripe_client, "create_checkout", create_checkout)
+    started = as_user(ALICE).post(f"/api/pay/{payment['id']}/topup").json()
+    assert started["url"].startswith("https://checkout.stripe.com/") and started["amount"] == "25.00"
+    assert (opened["amount"], opened["currency"], opened["return_path"]) == (Decimal("25.00"), "USD", f"/pay/{payment['id']}")
+    top_up(as_user(ALICE), monkeypatch, "alice", "cs_mp_6", amount_total=2500)
+    assert as_user(ALICE).post(f"/api/pay/{payment['id']}/topup").status_code == 400  # enough now
+    assert as_user(ALICE).post(f"/api/pay/{payment["id"]}/approve").json()["balances"] == {}  # all of it paid

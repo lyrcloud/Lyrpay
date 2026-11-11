@@ -7,13 +7,33 @@ import Logo from './Logo';
 export default function PayPage({ id, onDone }: { id: string; onDone: () => void }) {
   const [checkout, setCheckout] = useState<Checkout | null>(null);
   const [error, setError] = useState('');
-  const [busy, setBusy] = useState<'' | 'pay' | 'cancel'>('');
+  const [busy, setBusy] = useState<'' | 'pay' | 'cancel' | 'topup'>('');
+  const [notice, setNotice] = useState('');
+  // Back from Stripe after "Add and pay": the top-up's session (or "cancelled"), read before the address is tidied
+  const [topupReturn] = useState(() => new URLSearchParams(location.search).get('topup'));
 
   const load = () => api.checkout(id).then(c => { setCheckout(c); setError(''); }).catch(err => setError(err.message));
   useEffect(() => {
     // Signed in and on the page: the saved link has done its job, and the address bar keeps it for a refresh
     try { sessionStorage.removeItem('lyrpay_pay'); } catch { /* storage unavailable */ }
-    if (location.pathname !== `/pay/${id}`) history.replaceState(null, '', `/pay/${id}`);
+    if (location.pathname !== `/pay/${id}` || location.search) history.replaceState(null, '', `/pay/${id}`);
+    if (topupReturn === 'cancelled') setNotice('Top-up cancelled. Nothing was charged.');
+    if (topupReturn && topupReturn !== 'cancelled') {
+      // Credit the top-up, then pay: the person chose "Add and pay"
+      setBusy('pay');
+      api.confirmTopup(topupReturn)
+        .then(async ({ pending }) => {
+          if (pending) {
+            setNotice('Your top-up is on its way from the bank. Pay once it arrives.');
+            setBusy('');
+            return load();
+          }
+          const { redirect } = await api.approveCheckout(id);
+          location.href = redirect;
+        })
+        .catch(err => { setError(err.message); setBusy(''); load(); });
+      return;
+    }
     load();
   }, [id]);
   // Coming back from adding money in another tab: show the new balance
@@ -22,6 +42,17 @@ export default function PayPage({ id, onDone }: { id: string; onDone: () => void
     document.addEventListener('visibilitychange', again);
     return () => document.removeEventListener('visibilitychange', again);
   }, [id]);
+
+  const addAndPay = async () => {
+    setBusy('topup');
+    setError('');
+    try {
+      location.href = (await api.checkoutTopup(id)).url;
+    } catch (err) {
+      setError((err as Error).message);
+      setBusy('');
+    }
+  };
 
   const act = async (what: 'pay' | 'cancel') => {
     setBusy(what);
@@ -53,14 +84,21 @@ export default function PayPage({ id, onDone }: { id: string; onDone: () => void
                   <span>Your {checkout.currency} balance</span>
                   <strong className={checkout.enough ? '' : 'negative'}>{formatMoney(checkout.balance, checkout.currency)}</strong>
                 </div>
-                {!checkout.enough && (
-                  <p className="hint">
-                    Not enough {checkout.currency} yet. <a href="/#wallet" target="_blank" rel="noopener">Add money or convert</a> in a new tab, then come back here.
-                  </p>
+                {checkout.enough ? (
+                  <button className="button primary" disabled={!!busy} onClick={() => act('pay')}>
+                    {busy === 'pay' ? 'Paying…' : `Pay ${formatMoney(checkout.amount, checkout.currency)}`}
+                  </button>
+                ) : (
+                  <>
+                    <button className="button primary" disabled={!!busy} onClick={addAndPay}>
+                      {busy === 'topup' ? 'Opening card payment…' : busy === 'pay' ? 'Paying…'
+                        : `Add ${formatMoney(Math.max(0, Number(checkout.amount) - Number(checkout.balance)), checkout.currency)} by card and pay`}
+                    </button>
+                    <p className="hint">
+                      Card, Apple Pay or Google Pay. Or <a href="/#wallet" target="_blank" rel="noopener">add money another way</a> in a new tab and come back.
+                    </p>
+                  </>
                 )}
-                <button className="button primary" disabled={!!busy || !checkout.enough} onClick={() => act('pay')}>
-                  {busy === 'pay' ? 'Paying…' : `Pay ${formatMoney(checkout.amount, checkout.currency)}`}
-                </button>
                 <button className="button" disabled={!!busy} onClick={() => act('cancel')}>
                   {busy === 'cancel' ? 'Going back…' : `Cancel and return to ${checkout.merchant}`}
                 </button>
@@ -79,6 +117,7 @@ export default function PayPage({ id, onDone }: { id: string; onDone: () => void
             )}
           </>
         )}
+        {notice && <p className="info">{notice}</p>}
         {error && <p className="error" role="alert">{error}</p>}
         <button className="link" onClick={onDone}>Go to my wallet</button>
       </section>

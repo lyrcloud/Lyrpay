@@ -54,6 +54,11 @@ export type Rewards = {
   limits: { giftMinUsd: string; giftMaxUsd: string };
 };
 
+export type CheckoutSummary = {
+  id: string; merchant: string; amount: string; currency: string; description: string; status: Checkout['status'];
+  email: string; cancelUrl: string;
+};
+
 export type Checkout = {
   id: string; merchant: string; amount: string; currency: string; description: string;
   status: 'pending' | 'paid' | 'expired' | 'cancelled' | 'refunded' | 'partially_refunded';
@@ -185,6 +190,8 @@ export const api = {
   buyGiftCard: (order: { amount: string; currency: string; toEmail: string; toName: string; message: string }) =>
     post<{ card: GiftCard; emailed: boolean } & Statement>('/giftcards', order),
   checkout: (id: string) => request<Checkout>(`/pay/${id}`),
+  checkoutSummary: (id: string) => request<CheckoutSummary>(`/pay/${id}/summary`),
+  checkoutTopup: (id: string) => post<{ url: string; amount: string; currency: string }>(`/pay/${id}/topup`, {}),
   approveCheckout: (id: string) => post<{ redirect: string }>(`/pay/${id}/approve`, {}),
   cancelCheckout: (id: string) => post<{ redirect: string }>(`/pay/${id}/cancel`, {}),
   redeemPoints: (points: number) => post<{ usd: string } & Statement>('/points/redeem', { points }),
