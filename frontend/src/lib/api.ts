@@ -3,7 +3,9 @@ import { getIdToken } from './auth';
 export type TopUpMethods = {
   country: string; cards: string[]; local: { type: string; label: string; currency: string }[]; cardsOnly: boolean; currency: string; chargedIn: string;
   paypal?: boolean; paypalTest?: boolean; paypalChargedIn?: string;
+  dlocal?: boolean; dlocalTest?: boolean;
 };
+export type TopUpMethod = 'stripe' | 'paypal' | 'dlocal';
 export type Profile = { name: string; email: string; phone: string; currency: string; country: string };
 
 export type Transaction = {
@@ -143,10 +145,10 @@ export const api = {
   crypto: (vs: string) => request<{ vs: string; coins: Coin[] }>(`/crypto/markets?vs=${vs.toLowerCase()}`),
   stocks: (group: StockGroup) => request<{ group: StockGroup; quotes: Quote[] }>(`/stocks/markets?group=${group}`),
   topupMethods: (currency: string) => request<TopUpMethods>(`/topup/methods?${new URLSearchParams({ currency })}`),
-  topup: (amount: string, currency: string, coupon = '', method: 'stripe' | 'paypal' = 'stripe') =>
+  topup: (amount: string, currency: string, coupon = '', method: TopUpMethod = 'stripe') =>
     post<{ url: string }>('/topup', { amount, currency, coupon, method }),
   confirmTopup: (sessionId: string) =>
-    post<{ credited: boolean; pending?: boolean; amount: string; currency: string; bonus: string; couponNote: string } & Statement>('/topup/confirm', { sessionId }),
+    post<{ credited: boolean; pending?: boolean; provider?: string; amount: string; currency: string; bonus: string; couponNote: string } & Statement>('/topup/confirm', { sessionId }),
   checkCoupon: (code: string, amount: string, currency: string) =>
     request<{ code: string; bonus: string; currency: string; description: string }>(`/coupons/check?${new URLSearchParams({ code, amount, currency })}`),
   rewards: () => request<Rewards>('/rewards'),

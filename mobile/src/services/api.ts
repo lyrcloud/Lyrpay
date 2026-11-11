@@ -63,6 +63,7 @@ export const sendMoney = (to: string, amount: string, currency: string, note: st
 export type TopUpMethods = {
   country: string; cards: string[]; local: { type: string; label: string; currency: string }[]; cardsOnly: boolean; currency: string; chargedIn: string;
   paypal?: boolean; paypalTest?: boolean; paypalChargedIn?: string;
+  dlocal?: boolean; dlocalTest?: boolean;
 };
 
 export const topUpMethods = (currency: string) => request<TopUpMethods>(`/topup/methods?${new URLSearchParams({ currency })}`);
@@ -103,7 +104,7 @@ async function keepTopUps(topups: OpenTopUp[]) {
   await SecureStore.setItemAsync(TOPUPS_KEY, JSON.stringify(topups));
 }
 
-export async function startTopUp(amount: string, currency: string, coupon: string, method: 'stripe' | 'paypal' = 'stripe') {
+export async function startTopUp(amount: string, currency: string, coupon: string, method: 'stripe' | 'paypal' | 'dlocal' = 'stripe') {
   const { url, sessionId } = await post<{ url: string; sessionId: string }>('/topup', { amount, currency, coupon, method });
   // An API older than the app doesn't send the id; the website's return page confirms those as before
   if (sessionId) await keepTopUps([...(await openTopUps()), { sessionId, startedAt: Date.now() }]);

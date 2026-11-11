@@ -229,6 +229,15 @@ def save_paypal_order(order_id: str, **fields):
               AlreadyApplied())
 
 
+def save_dlocal_payment(ref: str, payment_id: str, **fields):
+    """What a dLocal payment was opened for, by Lyrpay's reference, and the reference by dLocal's payment id (its
+    notifications carry only that id)."""
+    _transact([
+        _put({"pk": f"DLOCAL#{ref}", "sk": "ORDER", "at": _now(), "payment": payment_id, **fields}, "attribute_not_exists(pk)"),
+        _put({"pk": f"DLOCALPAY#{payment_id}", "sk": "REF", "ref": ref}, "attribute_not_exists(pk)"),
+    ], AlreadyApplied())
+
+
 def note_paypal_capture(order_id: str, capture_id: str):
     table().update_item(Key={"pk": f"PAYPAL#{order_id}", "sk": "ORDER"}, UpdateExpression="SET capture = :c",
                         ExpressionAttributeValues={":c": capture_id})

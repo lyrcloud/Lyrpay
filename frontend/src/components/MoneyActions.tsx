@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { ApiError, api, type Payouts, type Statement, type TopUpMethods, type WiseAccountType, type WiseInfo } from '../lib/api';
+import { ApiError, api, type Payouts, type Statement, type TopUpMethod, type TopUpMethods, type WiseAccountType, type WiseInfo } from '../lib/api';
 import { countryName, currencyName, formatMoney } from '../lib/format';
 
 type Props = {
@@ -89,7 +89,7 @@ export function AddMoney({ currencies, home, cardPayments }: Props & { cardPayme
   const [promoOpen, setPromoOpen] = useState(false);
   const [bonus, setBonus] = useState<{ text: string; ok: boolean } | null>(null);
   const [ways, setWays] = useState<TopUpMethods | null>(null);
-  const [method, setMethod] = useState<'stripe' | 'paypal'>('stripe');
+  const [method, setMethod] = useState<TopUpMethod>('stripe');
   const { busy, error, run } = useAction();
   useEffect(() => setCurrency(home), [home]);
   const paypal = !!ways?.paypal;
@@ -139,6 +139,13 @@ export function AddMoney({ currencies, home, cardPayments }: Props & { cardPayme
         <p className="hint">PayPal can't charge in {currency}, so PayPal takes the US dollar equivalent. Your wallet gets the full amount in {currency}.</p>
       )}
       {ways?.paypalTest && <p className="hint">PayPal is in test mode (admins only): pay with a PayPal sandbox account.</p>}
+      {ways?.dlocal && (
+        <button className="button" disabled={busy} onClick={() => setMethod('dlocal')}>
+          {busy && method === 'dlocal' ? 'Opening dLocal…' : 'Pay with local methods'}
+        </button>
+      )}
+      {ways?.dlocal && <p className="hint">Pix, OXXO, Boleto, PSE, bank transfer, cash and local cards, through dLocal.</p>}
+      {ways?.dlocalTest && <p className="hint">dLocal is in test mode (admins only): pay with card 4111 1111 1111 1111.</p>}
       {!cardPayments && <p className="hint">Card payments are being switched on. Check back soon.</p>}
     </form>
   );

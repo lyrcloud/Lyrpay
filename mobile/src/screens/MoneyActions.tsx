@@ -125,9 +125,9 @@ export function AddMoney({ home, onNotice, cardPayments }: Props & { cardPayment
     return () => clearTimeout(timer);
   }, [promo, amount, currency]);
 
-  const pay = (method: 'stripe' | 'paypal') => run(async () => {
+  const pay = (method: 'stripe' | 'paypal' | 'dlocal') => run(async () => {
     await Linking.openURL(await startTopUp(amount, currency, bonus?.ok ? promo : '', method));
-    const by = method === 'paypal' ? 'PayPal' : 'Stripe';
+    const by = { stripe: 'Stripe', paypal: 'PayPal', dlocal: 'dLocal' }[method];
     onNotice(`Finish paying in your browser, then come back here. Your balance updates once ${by} confirms the payment.`);
     setAmount('');
     setPromo('');
@@ -153,6 +153,9 @@ export function AddMoney({ home, onNotice, cardPayments }: Props & { cardPayment
       <Button title="Continue to payment" onPress={pay('stripe')} busy={busy} disabled={!cardPayments} />
       {!!ways?.paypal && <Button title="Pay with PayPal" onPress={pay('paypal')} busy={busy} />}
       {!!ways?.paypalTest && <Text style={styles.hint}>PayPal is in test mode (admins only).</Text>}
+      {!!ways?.dlocal && <Button title="Pay with local methods" onPress={pay('dlocal')} busy={busy} />}
+      {!!ways?.dlocal && <Text style={styles.hint}>Pix, OXXO, Boleto, PSE, bank transfer, cash and local cards, through dLocal.</Text>}
+      {!!ways?.dlocalTest && <Text style={styles.hint}>dLocal is in test mode (admins only).</Text>}
       {!cardPayments && <Text style={styles.hint}>Card payments are being switched on. Check back soon.</Text>}
     </>
   );

@@ -139,6 +139,27 @@ aws secretsmanager create-secret --name lyrpay/paypal \
 With `"env":"sandbox"` only admins (`ADMIN_EMAILS`) see PayPal, paying with sandbox buyer accounts; switch to the live
 app's keys and `"env":"live"` to offer it to everyone. Secret changes reach the backend within 5 minutes.
 
+### Top-ups with local ways to pay through dLocal Go
+
+dLocal Go adds "Pay with local methods" to the top-up form for people in the 18 countries it collects in for a US
+company: Argentina, Bolivia, Brazil, Chile, Colombia, Costa Rica, the Dominican Republic, Ecuador, Guatemala, Mexico,
+Panama, Paraguay, Peru, Uruguay, Indonesia, Malaysia, Kenya and Nigeria (Pix, OXXO, Boleto, PSE, bank transfers, cash
+vouchers, local cards). The person pays on dLocal's checkout page; Lyrpay credits the amount it recorded once dLocal
+reports the payment PAID, at most once. Cash and bank payments stay pending until dLocal's signed notification
+(`/api/dlocal/notify`) or the 15-minute sweep sees them paid, and fail if they expire.
+
+1. Sign up at dashboard-sbx.dlocalgo.com (sandbox) or dashboard.dlocalgo.com (live) and copy the keys from
+   Integrations > API Keys.
+2. Save them (sandbox: admins only, card 4111 1111 1111 1111):
+
+   ```bash
+   aws secretsmanager create-secret --region us-east-1 --name lyrpay/dlocal \
+     --secret-string '{"api_key":"...","secret_key":"...","env":"sandbox"}'
+   ```
+
+   With live keys, add `"admins_only":true` to try them before customers see them. Changes reach the site within
+   5 minutes, no redeploy.
+
 ### Withdrawals in any currency through Wise
 
 With a Wise token saved, the withdraw form offers "Any currency · Wise" next to Stripe/Plaid. The person picks a

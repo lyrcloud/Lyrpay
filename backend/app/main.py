@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import time
 from datetime import datetime, timedelta, timezone
 from decimal import ROUND_UP, Decimal
@@ -13,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
-from app import cards, ledger, lyrbot, mail, paypal_client, plaid_client, rates, rewards, stocks, stripe_app, stripe_client, topup_methods, wise_client
+from app import cards, dlocal_client, ledger, lyrbot, mail, paypal_client, plaid_client, rates, rewards, stocks, stripe_app, stripe_client, topup_methods, wise_client
 from app.auth import User, current_user
 from app.money import exponent, from_minor, parse_amount, quantize
 
@@ -382,7 +383,7 @@ class TopUp(BaseModel):
     amount: str
     currency: str
     coupon: str = ""
-    method: str = "stripe"  # or "paypal"
+    method: str = "stripe"  # or "paypal", or "dlocal" (local ways to pay in Latin America, Africa and Asia)
 
 
 @app.post("/api/topup")
@@ -400,6 +401,10 @@ def topup(body: TopUp, request: Request, user: User = Depends(current_user)):
         if not paypal_topups(user.email):
             raise ValueError("PayPal isn't switched on yet. Pay by card instead.")
         return start_paypal(user, amount, currency, site_origin(request), coupon)
+    if body.method == "dlocal":
+        if not dlocal_topups(user.email):
+            raise ValueError("Local payments aren't switched on yet. Pay by card instead.")
+        return start_dlocal(user, amount, currency, site_origin(request), coupon)
     session = start_checkout(user, amount, currency, site_origin(request), coupon)
     # The mobile app confirms the session itself: Checkout returns to the website, where it may not be signed in
     return {"url": session["url"], "sessionId": session["id"]}
@@ -527,6 +532,143 @@ def confirm_paypal(user: User, ref: str) -> dict:
     return {**credit_payment(user.sub, ref, currency, amount, record.get("coupon", ""), "PayPal"), **statement(user.sub)}
 
 
+def dlocal_topups(email: str) -> bool:
+    """dLocal top-ups once its keys are set: live keys for everyone unless admins_only, sandbox keys for admins only
+    (their test payments credit pretend money)."""
+    current = dlocal_client.env()
+    admin = bool(email) and email in ADMIN_EMAILS
+    return admin if current == "sandbox" or (current == "live" and dlocal_client.admins_only()) else current == "live"
+
+
+def dlocal_call(call, *args, **kwargs):
+    try:
+        return call(*args, **kwargs)
+    except dlocal_client.DLocalError as error:
+        raise HTTPException(status_code=400 if error.definitive else 502, detail=str(error))
+
+
+DLOCAL_REF = re.compile(r"^dlocal_([0-9a-f]{24})$")
+
+
+def start_dlocal(user: User, amount: Decimal, currency: str, origin: str, coupon: str) -> dict:
+    """A dLocal Go payment for a top-up, in the person's currency when dLocal charges in it, else the US dollar
+    equivalent (dLocal shows the local amount at checkout). Recorded so it's credited as recorded."""
+    charge_currency, charge = (currency, amount) if currency in dlocal_client.currencies() else ("USD", usd_charge(amount, currency))
+    charge = charge.quantize(Decimal("0.01"), rounding=ROUND_UP)
+    ref = f"dlocal_{secrets.token_hex(12)}"
+    site = os.getenv("SITE_URL") or ALLOWED_ORIGINS[0]
+    payment = dlocal_call(
+        dlocal_client.create_payment, order_id=ref, amount=charge, currency=charge_currency,
+        country=ledger.ensure_profile(user).get("country", ""), description=f"Lyrpay balance top-up: {amount} {currency}",
+        email=user.email, success_url=f"{origin}/?topup={ref}", back_url=f"{origin}/?topup=cancelled",
+        notification_url=f"{site}/api/dlocal/notify",
+    )
+    ledger.save_dlocal_payment(ref, payment["id"], sub=user.sub, currency=currency, amount=amount, chargeCurrency=charge_currency,
+                               charge=dlocal_client.value(charge), coupon=coupon, env=dlocal_client.env())
+    return {"url": payment["url"], "sessionId": ref}
+
+
+def dlocal_record(ref: str) -> dict:
+    record = ledger.get_item(f"DLOCAL#{ref}", "ORDER") if DLOCAL_REF.match(ref) else None
+    if not record:
+        raise ValueError("That payment link isn't valid.")
+    return record
+
+
+def settle_dlocal(sub: str, ref: str, record: dict, payment: dict) -> tuple[str, dict | None]:
+    """Record what dLocal says about a payment: 'paid' (credited, with the credit's details), 'pending' (cash or bank
+    payment on its way), 'open' (nothing paid yet) or 'failed'."""
+    status = payment.get("status")
+    if status in ("REJECTED", "CANCELLED", "EXPIRED"):
+        waiting = ledger.get_item(f"TOPUP#{ref}", "PENDING")
+        if waiting:
+            line = ledger.get_item(f"USER#{sub}", waiting["tx"])
+            if line:
+                ledger.fail_topup(line)
+        return "failed", None
+    try:
+        matches = (str(payment.get("currency", "")).upper() == record["chargeCurrency"]
+                   and Decimal(str(payment.get("amount"))).quantize(Decimal("0.01")) == Decimal(record["charge"]))
+    except ArithmeticError:
+        matches = False
+    if not matches:
+        logger.error("dLocal payment %s is %s %s, expected %s %s: not credited", record["payment"], payment.get("amount"),
+                     payment.get("currency"), record["charge"], record["chargeCurrency"])
+        raise HTTPException(status_code=409, detail="That payment doesn't match the top-up. Contact support.")
+    if status == "PAID":
+        return "paid", credit_payment(sub, ref, record["currency"], Decimal(record["amount"]), record.get("coupon", ""), "dLocal")
+    if payment.get("status_detail") == "PENDING_PAYMENT":
+        ledger.start_topup(sub, ref, record["currency"], Decimal(record["amount"]), counterparty="dLocal")
+        return "pending", None
+    return "open", None
+
+
+def confirm_dlocal(user: User, ref: str) -> dict:
+    record = dlocal_record(ref)
+    if record["sub"] != user.sub:
+        raise HTTPException(status_code=409, detail="That payment belongs to another account.")
+    if record.get("env") != dlocal_client.env():
+        raise HTTPException(status_code=409, detail="That payment was made in test mode.")
+    currency, amount = record["currency"], Decimal(record["amount"])
+    nothing = {"currency": currency, "amount": money(amount, currency), "bonus": money(Decimal(0), currency), "couponNote": ""}
+    if ledger.get_item(f"TOPUP#{ref}", "TOPUP"):  # credited already, maybe by dLocal's notification
+        return {"credited": False, **nothing, **statement(user.sub)}
+    outcome, credited = settle_dlocal(user.sub, ref, record, dlocal_call(dlocal_client.get_payment, record["payment"]))
+    if outcome == "paid":
+        return {**credited, **statement(user.sub)}
+    if outcome == "failed":
+        raise HTTPException(status_code=409, detail="dLocal didn't take the payment. Nothing was added.")
+    if outcome == "pending":
+        return {"credited": False, "pending": True, "provider": "dLocal", **nothing, **statement(user.sub)}
+    raise HTTPException(status_code=409, detail="That payment hasn't completed yet.")
+
+
+def check_dlocal_topup(sub: str, tx: dict) -> str:
+    """A cash or bank payment through dLocal: credited once dLocal has it, marked failed if it expires."""
+    ref = tx["reference"]
+    record = dlocal_record(ref)
+    if record.get("env") != dlocal_client.env():
+        return "pending"
+    try:
+        outcome = settle_dlocal(sub, ref, record, dlocal_client.get_payment(record["payment"]))[0]
+    except dlocal_client.DLocalError as error:
+        logger.warning("Checking dLocal top-up %s: %s", ref, error)
+        return "pending"
+    return "pending" if outcome == "open" else outcome
+
+
+@app.post("/api/dlocal/notify")
+async def dlocal_notify(request: Request):
+    """dLocal Go posts {"payment_id"} on every status change, signed; the payment is read back from dLocal, so only
+    what dLocal itself reports is credited. Anything but 200 makes dLocal retry every 10 minutes."""
+    payload = await request.body()
+    return await run_in_threadpool(dlocal_notification, payload, request.headers.get("authorization", ""))
+
+
+def dlocal_notification(payload: bytes, authorization: str) -> dict:
+    if not dlocal_client.signature_ok(payload, authorization):
+        raise HTTPException(status_code=401, detail="Bad signature.")
+    try:
+        payment_id = str(json.loads(payload).get("payment_id") or "")
+    except (ValueError, AttributeError):
+        payment_id = ""
+    found = ledger.get_item(f"DLOCALPAY#{payment_id}", "REF") if payment_id else None
+    if not found:
+        return {"received": True}  # a refund, or a payment Lyrpay didn't open
+    record = dlocal_record(found["ref"])
+    if record.get("env") != dlocal_client.env():
+        return {"received": True}
+    payment = dlocal_call(dlocal_client.get_payment, payment_id)
+    try:
+        outcome = settle_dlocal(record["sub"], found["ref"], record, payment)[0]
+    except HTTPException as error:
+        if error.status_code == 409:
+            return {"received": True}  # logged; held for support, retrying won't change it
+        raise
+    logger.info("dLocal payment %s: %s", payment_id, outcome)
+    return {"received": True}
+
+
 def checkout_credit(session: dict) -> tuple[str, Decimal]:
     """The currency and amount a Checkout session puts in the wallet: what was paid, or for a payment made in US
     dollars for a currency Stripe can't charge, the amount in that currency."""
@@ -552,11 +694,14 @@ def topup_methods_for_me(currency: str = "", user: User = Depends(current_user))
     ways = topup_methods.for_country(ledger.ensure_profile(user).get("country", ""))
     code = currency.upper()
     paypal = paypal_topups(user.email)
+    dlocal = dlocal_topups(user.email) and (ways["country"] in dlocal_client.COUNTRIES or user.email in ADMIN_EMAILS)
     return {
         **ways, "currency": code, "chargedIn": code if not code or stripe_client.chargeable(code) else "USD",
         # PayPal: whether it's offered, and the currency it charges this top-up in (whole HUF/JPY/TWD amounts aside)
         "paypal": paypal, "paypalTest": paypal and paypal_client.env() == "sandbox",
         "paypalChargedIn": code if not code or code in paypal_client.CURRENCIES else "USD",
+        # dLocal: local ways to pay where dLocal Go collects (admins see it anywhere, to try it)
+        "dlocal": dlocal, "dlocalTest": dlocal and dlocal_client.env() == "sandbox",
     }
 
 
@@ -568,6 +713,8 @@ class TopUpConfirm(BaseModel):
 def topup_confirm(body: TopUpConfirm, user: User = Depends(current_user)):
     if body.sessionId.startswith("paypal_"):
         return confirm_paypal(user, body.sessionId)
+    if body.sessionId.startswith("dlocal_"):
+        return confirm_dlocal(user, body.sessionId)
     if not re.match(r"^cs_[A-Za-z0-9_]+$", body.sessionId):
         raise ValueError("That payment link isn't valid.")
     session = stripe_call(stripe_client.get_checkout, body.sessionId)
@@ -870,6 +1017,8 @@ def check_topup(tx: dict) -> str:
     sub, session_id = tx["pk"].removeprefix("USER#"), tx["reference"]
     if session_id.startswith("paypal_"):
         return check_paypal_topup(sub, tx)
+    if session_id.startswith("dlocal_"):
+        return check_dlocal_topup(sub, tx)
     try:
         session = stripe_client.get_checkout(session_id)
         if session.get("payment_status") == "paid":
