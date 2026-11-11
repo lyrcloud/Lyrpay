@@ -15,22 +15,30 @@ EU = {
     "NL", "PL", "PT", "RO", "SK", "SI", "ES", "SE",
 }
 SEPA = EU | {"IS", "LI", "NO", "CH", "GB", "MC", "SM", "AD", "VA", "GI"}
+KLARNA = {
+    "AU", "AT", "BE", "CA", "HR", "CY", "DK", "EE", "FI", "FR", "DE", "GR", "IE", "IT", "LV", "LT", "LU", "MT", "NL",
+    "NZ", "NO", "PL", "RO", "SK", "SI", "ES", "SE", "CH", "GB", "US",
+}
 EVERYWHERE = None
 
 # Stripe payment method type: (label, customer countries or EVERYWHERE, the one currency it takes or None for any)
 LOCAL = {
     "us_bank_account": ("US bank account (ACH)", {"US"}, "USD"),
     "cashapp": ("Cash App Pay", {"US"}, "USD"),
-    "affirm": ("Affirm", {"US"}, "USD"),
-    "afterpay_clearpay": ("Afterpay", {"US"}, "USD"),
-    "klarna": ("Klarna", {"US"}, "USD"),
+    # Pay later: Klarna, Afterpay, Affirm and Zip take the payer's own currency where they work
+    "klarna": ("Klarna", KLARNA, None),
+    "afterpay_clearpay": ("Afterpay / Clearpay", {"AU", "CA", "NZ", "GB", "US"}, None),
+    "affirm": ("Affirm", {"CA", "US"}, None),
+    "zip": ("Zip", {"AU", "US"}, None),
     "amazon_pay": ("Amazon Pay", EVERYWHERE, "USD"),
     "crypto": ("Stablecoins (USDC)", EVERYWHERE, "USD"),
+    "acss_debit": ("Canadian bank debit", {"CA"}, "CAD"),
     "sepa_debit": ("SEPA bank debit", SEPA, "EUR"),
     "ideal": ("iDEAL | Wero", {"NL"}, "EUR"),
     "bancontact": ("Bancontact", {"BE"}, "EUR"),
     "eps": ("EPS", {"AT"}, "EUR"),
     "p24": ("Przelewy24", {"PL"}, None),  # EUR or PLN
+    "blik": ("BLIK", {"PL"}, "PLN"),
     "mb_way": ("MB WAY", {"PT"}, "EUR"),
     "multibanco": ("Multibanco", {"PT"}, "EUR"),
     "pay_by_bank": ("Pay by Bank", {"GB", "IE", "FI"}, None),  # GBP or EUR
@@ -56,7 +64,10 @@ def enabled() -> set | None:
         _enabled_read = time.monotonic()
         try:
             configs = stripe_client.payment_method_configurations()
-            default = next((c for c in configs if c.get("is_default")), configs[0] if configs else None)
+            # Apps installed on the account (and Connect platforms) add their own "Default" configurations; Checkout
+            # uses the account's own, the one no application made
+            own = [c for c in configs if not c.get("application")] or configs
+            default = next((c for c in own if c.get("is_default")), own[0] if own else None)
             if default is not None:
                 _enabled = {
                     kind for kind in LOCAL

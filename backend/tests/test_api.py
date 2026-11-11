@@ -899,6 +899,18 @@ def test_topup_methods_follow_country_and_dashboard(as_user, monkeypatch):
     assert alice.get("/api/topup/methods").json()["country"] == ""
 
 
+def test_topup_methods_read_the_accounts_own_settings_not_an_apps(monkeypatch):
+    from app import topup_methods
+
+    app_config = {**pm_config()[0], "application": "ca_someapp"}
+    own = pm_config(klarna="on", afterpay_clearpay="on", blik="on")[0]
+    monkeypatch.setattr(topup_methods, "_enabled_read", 0.0)
+    monkeypatch.setattr(stripe_client, "payment_method_configurations", lambda: [app_config, own])
+    assert [m["type"] for m in topup_methods.for_country("GB")["local"]] == ["klarna", "afterpay_clearpay"]
+    assert [m["type"] for m in topup_methods.for_country("PL")["local"]] == ["klarna", "blik"]
+    assert topup_methods.for_country("DE")["local"][0] == {"type": "klarna", "label": "Klarna", "currency": ""}
+
+
 def test_topup_methods_without_dashboard_access_claim_nothing(monkeypatch):
     from app import topup_methods
 
