@@ -155,7 +155,7 @@ aws secretsmanager create-secret --name lyrpay/wise \
 ```
 
 `"env":"sandbox"` (a token from the Wise sandbox) shows Wise to admins only; a live token with `"env":"live"`
-shows it to everyone. Keep the Wise balance in `source` funded. If Wise asks for payouts to be signed (strong customer
+shows it to everyone; add `"admins_only": true` to try a live token as an admin first. Keep the Wise balance in `source` funded. If Wise asks for payouts to be signed (strong customer
 authentication), add `"private_key"` (PEM) to the secret and upload the matching public key next to the token in Wise.
 
 ### Point lyrpay.com here

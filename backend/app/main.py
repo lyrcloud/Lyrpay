@@ -963,7 +963,9 @@ def connect_off() -> bool:
 def wise_payouts(email: str) -> bool:
     """Wise withdrawals once its token is set. Sandbox only for admins, so no real balance is ever sent to a pretend bank."""
     current = wise_client.env()
-    return current == "live" or (current == "sandbox" and bool(email) and email in ADMIN_EMAILS)
+    admin = bool(email) and email in ADMIN_EMAILS
+    # "admins_only" in the secret: a live token tried out by admins before customers see it
+    return admin if current == "sandbox" or (current == "live" and wise_client.admins_only()) else current == "live"
 
 
 def wise_call(call, *args, **kwargs):

@@ -62,6 +62,10 @@ def env() -> str:
     return found["env"] if found else ""
 
 
+def admins_only() -> bool:
+    return bool((keys() or {}).get("admins_only"))
+
+
 def source() -> str:
     found = keys() or {}
     return (found.get("source") or "USD").upper()
