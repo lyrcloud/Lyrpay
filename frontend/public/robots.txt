@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+Disallow: /pay/
+Disallow: /auth/
+
+Sitemap: https://lyrpay.com/sitemap.xml

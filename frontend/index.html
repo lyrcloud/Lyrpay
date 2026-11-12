@@ -3,17 +3,118 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="Lyrpay: hold, send and convert money in every currency." />
+    <title>Lyrpay – Multi-currency wallet, money transfers and live markets</title>
+    <meta name="description" content="Hold, send and convert 160+ currencies at the live mid-market rate with a flat 0.5% fee. Pay anyone by email or mobile number, and follow AI shares, ETFs, indices and crypto live." />
+    <link rel="canonical" href="https://lyrpay.com/" />
+    <meta name="robots" content="index, follow, max-image-preview:large" />
     <meta name="theme-color" content="#0b1020" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
-    <meta property="og:title" content="Lyrpay" />
-    <meta property="og:description" content="Hold, send and convert money in every currency, with live crypto and exchange rates." />
-    <meta property="og:image" content="https://lyrpay.com/apple-touch-icon.png" />
-    <title>Lyrpay</title>
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Lyrpay" />
+    <meta property="og:url" content="https://lyrpay.com/" />
+    <meta property="og:title" content="Lyrpay – Your money and the world’s markets, in one place" />
+    <meta property="og:description" content="Hold, send and convert 160+ currencies at the live mid-market rate, and follow shares, ETFs and crypto live." />
+    <meta property="og:image" content="https://lyrpay.com/og-image.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Lyrpay: your money and the world’s markets, in one place" />
+    <meta property="og:locale" content="en_US" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Lyrpay – Your money and the world’s markets, in one place" />
+    <meta name="twitter:description" content="Hold, send and convert 160+ currencies at the live mid-market rate, and follow shares, ETFs and crypto live." />
+    <meta name="twitter:image" content="https://lyrpay.com/og-image.png" />
+    <meta name="twitter:image:alt" content="Lyrpay: your money and the world’s markets, in one place" />
+
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "Organization",
+            "@id": "https://lyrpay.com/#org",
+            "name": "Lyrpay",
+            "url": "https://lyrpay.com/",
+            "logo": "https://lyrpay.com/apple-touch-icon.png"
+          },
+          {
+            "@type": "WebSite",
+            "@id": "https://lyrpay.com/#site",
+            "name": "Lyrpay",
+            "url": "https://lyrpay.com/",
+            "publisher": { "@id": "https://lyrpay.com/#org" }
+          },
+          {
+            "@type": "WebApplication",
+            "name": "Lyrpay",
+            "url": "https://lyrpay.com/",
+            "applicationCategory": "FinanceApplication",
+            "operatingSystem": "Web, iOS, Android",
+            "description": "Multi-currency wallet: hold, send and convert 160+ currencies at the live mid-market rate, pay anyone by email or mobile number, and follow shares, ETFs, indices and crypto live.",
+            "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+            "publisher": { "@id": "https://lyrpay.com/#org" }
+          }
+        ]
+      }
+    </script>
+
+    <!-- Styles for the static home page below, shown until the app loads (and to crawlers that don't run JavaScript) -->
+    <style>
+      .static-home { max-width: 960px; margin: 0 auto; padding: 48px 16px; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: #11142a; line-height: 1.5; }
+      .static-home header { display: flex; align-items: center; gap: 12px; font-weight: 700; font-size: 1.4rem; }
+      .static-home h1 { font-size: clamp(1.8rem, 5vw, 2.8rem); line-height: 1.15; margin: 32px 0 12px; }
+      .static-home h2 { font-size: 1.3rem; margin: 40px 0 12px; }
+      .static-home h3 { font-size: 1rem; margin: 0 0 4px; }
+      .static-home p, .static-home li { color: #474c68; }
+      .static-home .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 20px; }
+      .static-home a { color: #5b5bf6; }
+      .static-home footer { margin-top: 48px; font-size: 0.9rem; color: #646985; }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <!-- Replaced by the app as soon as it starts; mirrors the signed-out home page in AuthPage.tsx -->
+      <div class="static-home">
+        <header><img src="/favicon.svg" width="40" height="40" alt="Lyrpay logo" /> Lyrpay</header>
+        <main>
+          <h1>Your money and the world’s markets, in one place.</h1>
+          <p>
+            Lyrpay is a multi-currency wallet. Hold, send and convert 160+ currencies at the live mid-market rate,
+            pay anyone by email or mobile number, and follow AI shares, ETFs, world indices, crypto and commodities live,
+            all from one Lyr account.
+          </p>
+          <p><a href="/">Create a free Lyrpay account</a> or sign in with your Lyrtrip account.</p>
+
+          <h2>Why people use Lyrpay</h2>
+          <ul>
+            <li>160+ currencies held in one wallet</li>
+            <li>Live mid-market exchange rates with a flat 0.5% conversion fee</li>
+            <li>Instant payments to anyone on Lyrpay by email or mobile number</li>
+            <li>One Lyr account for Lyrpay and Lyrtrip</li>
+            <li>Gift cards, referral rewards and business accounts</li>
+          </ul>
+
+          <h2>Features</h2>
+          <div class="grid">
+            <section><h3>AI shares, live</h3><p>NVIDIA, Microsoft, Alphabet, AMD, Palantir and more, with a live pulse of the whole AI market.</p></section>
+            <section><h3>ETFs and indices</h3><p>S&amp;P 500, Nasdaq, Nifty, Nikkei, DAX and popular funds from SPY and QQQ to AI and chip ETFs.</p></section>
+            <section><h3>Crypto and commodities</h3><p>The top 50 coins by market cap, plus gold, silver, oil and copper futures.</p></section>
+            <section><h3>160+ currencies</h3><p>Hold, send and convert at the live mid-market rate with a flat 0.5% fee.</p></section>
+            <section><h3>Pay anyone instantly</h3><p>Send money to any Lyrpay user by email or mobile number in seconds.</p></section>
+            <section><h3>Rewards and gift cards</h3><p>Earn for inviting friends, send gift cards and run a business account.</p></section>
+          </div>
+
+          <h2>Pay with Lyrpay</h2>
+          <p>
+            Check out on <a href="https://lyrshop.com/">Lyrshop</a>, <a href="https://lyrtrip.com/">Lyrtrip</a> and
+            <a href="https://lyrcloud.com/">Lyrcloud</a> straight from your Lyrpay balance, and top up by card, Apple Pay or PayPal
+            when you need to.
+          </p>
+        </main>
+        <footer>© Lyrpay · Powered by <a href="https://lyrcloud.com/">Lyrcloud</a></footer>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
