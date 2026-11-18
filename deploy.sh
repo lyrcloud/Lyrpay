@@ -29,6 +29,8 @@ CERTIFICATE_ARN=${CERTIFICATE_ARN:-$(previous CertificateArn)}
 STRIPE_PUBLISHABLE_KEY=${STRIPE_PUBLISHABLE_KEY:-$(previous StripePublishableKey)}
 CARD_TERMS_URL=${CARD_TERMS_URL:-$(previous CardTermsUrl)}
 KEPT=()
+# Lyrbot's Gemini key is the one shared by the Lyr sites unless GEMINI_SECRET_NAME says otherwise
+KEPT+=("GeminiSecretName=${GEMINI_SECRET_NAME:-lyrsoft/gemini}")
 [ -n "$CERTIFICATE_ARN" ] && KEPT+=("CertificateArn=$CERTIFICATE_ARN")
 [ -n "$STRIPE_PUBLISHABLE_KEY" ] && KEPT+=("StripePublishableKey=$STRIPE_PUBLISHABLE_KEY")
 [ -n "$CARD_TERMS_URL" ] && KEPT+=("CardTermsUrl=$CARD_TERMS_URL")
