@@ -32,7 +32,11 @@ Parameters:
   AnthropicSecretName:
     Type: String
     Default: lyrshop/anthropic
-    Description: Secrets Manager secret holding the Anthropic API key Lyrbot uses (shared with Lyrcloud, Lyrshop and Lyrsoft).
+    Description: Secrets Manager secret holding the Anthropic API key Lyrbot falls back to when Gemini can't answer (shared with Lyrcloud, Lyrshop and Lyrsoft).
+  GeminiSecretName:
+    Type: String
+    Default: lyrpay/gemini
+    Description: Secrets Manager secret holding the Google Gemini API key Lyrbot tries first. Until it exists, Claude answers everything.
 
 Conditions:
   HasDomain: !Not [!Equals [!Ref CertificateArn, '']]
@@ -57,6 +61,7 @@ Globals:
         MAIL_SIGNING_SECRET_ID: !Ref MailSigningSecret
         SITE_URL: !Ref PrimaryOrigin
         ANTHROPIC_SECRET_ID: !Ref AnthropicSecretName
+        GEMINI_SECRET_ID: !Ref GeminiSecretName
         LYRBOT_LIMITS_TABLE: !Ref LyrbotLimitsTable
 
 Resources:
@@ -159,6 +164,7 @@ Resources:
                 - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:lyrpay/wise-*'
                 - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:lyrpay/dlocal-*'
                 - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${AnthropicSecretName}-*'
+                - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${GeminiSecretName}-*'
                 - !Ref MailSigningSecret
             - Effect: Allow
               Action: ses:SendEmail

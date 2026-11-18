@@ -1,5 +1,7 @@
 """Lyrbot: the lyrpay.com help assistant, as on Lyrcloud, Lyrshop, Lyrtrip and Lyrsoft. Claude answers questions
 about Lyrpay from the facts below and points people to support for anything that needs a person or an account.
+Google Gemini answers first because its free tier costs nothing; when Gemini is busy, out of requests or fails,
+Claude answers instead, so visitors always get a reply. Either key may be missing.
 The route is open to every visitor, so use is capped per visitor per hour and for the whole site per day."""
 
 import logging
@@ -9,8 +11,16 @@ from datetime import datetime, timezone
 
 import anthropic
 import boto3
+import httpx
 
 MODEL = "claude-opus-5-5"
+# Free-tier Gemini models, tried in order ("-latest" follows Google's newest Flash models); each has its own free quota
+GEMINI_MODELS = ["gemini-flash-lite-latest", "gemini-flash-latest"]
+GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models"
+# CloudFront and the Lambda give up after about 30 seconds: each Gemini model gets a few seconds, Claude what is left
+TOTAL_BUDGET = 26.0
+GEMINI_TIMEOUT = 8.0
+CLAUDE_MIN = 8.0
 HOURLY_LIMIT = 20
 DAILY_LIMIT = 1500
 MAX_TURNS = 12
@@ -22,6 +32,8 @@ LYR_CHAT_URL = "https://lyrsoft.com/chat/#/new?to=support&site=Lyrpay"
 
 # Shared with Lyrcloud, Lyrshop and Lyrsoft; ANTHROPIC_API_KEY wins (local dev)
 SECRET_ID = os.getenv("ANTHROPIC_SECRET_ID", "lyrshop/anthropic")
+# Lyrpay's own Gemini key; GEMINI_API_KEY wins (local dev). Until the secret exists, Claude answers everything.
+GEMINI_SECRET_ID = os.getenv("GEMINI_SECRET_ID", "lyrpay/gemini")
 # Use counters, keyed { pk: "lyrbot#<ip>" | "lyrbot#all", sk: <hour> | <day> }, expired by TTL
 LIMITS_TABLE = os.getenv("LYRBOT_LIMITS_TABLE", "")
 KEY_FOR = 300
@@ -60,8 +72,8 @@ BUSY_MESSAGE = "Lyrbot is busy right now. Try again in a minute."
 logger = logging.getLogger("lyrpay")
 
 _client: anthropic.Anthropic | None = None
-_key: str | None = None
-_key_read = 0.0
+# secret id -> (value or None, when read)
+_secrets: dict[str, tuple[str | None, float]] = {}
 
 
 def clean_messages(messages) -> list[dict] | None:
@@ -83,26 +95,38 @@ def clean_messages(messages) -> list[dict] | None:
     return recent if recent and recent[-1]["role"] == "user" else None
 
 
-def api_key() -> str | None:
+def _secret(env_name: str, secret_id: str) -> str | None:
     """Read again every few minutes, so a changed key reaches warm instances without a redeploy."""
-    global _key, _key_read, _client
-    if os.getenv("ANTHROPIC_API_KEY"):
-        return os.environ["ANTHROPIC_API_KEY"]
-    if not SECRET_ID:
+    if os.getenv(env_name):
+        return os.environ[env_name]
+    if not secret_id:
         return None
-    if _key is None or time.monotonic() - _key_read > KEY_FOR:
-        _key_read = time.monotonic()
+    value, read_at = _secrets.get(secret_id, (None, None))
+    if read_at is None or time.monotonic() - read_at > KEY_FOR:
         try:
-            fresh = boto3.client("secretsmanager").get_secret_value(SecretId=SECRET_ID)["SecretString"].strip()
-            if fresh != _key:
-                _key, _client = fresh, None
-        except Exception:
-            logger.exception("Lyrbot could not read its API key")
-    return _key
+            value = boto3.client("secretsmanager").get_secret_value(SecretId=secret_id)["SecretString"].strip() or None
+        except Exception as error:
+            # A missing Gemini secret is normal (Claude answers); anything else is worth a look
+            if getattr(error, "response", {}).get("Error", {}).get("Code") != "ResourceNotFoundException":
+                logger.exception("Lyrbot could not read %s", secret_id)
+        _secrets[secret_id] = (value, time.monotonic())
+    return value
+
+
+def api_key() -> str | None:
+    global _client
+    key = _secret("ANTHROPIC_API_KEY", SECRET_ID)
+    if _client is not None and _client.api_key != key:
+        _client = None
+    return key
+
+
+def gemini_key() -> str | None:
+    return _secret("GEMINI_API_KEY", GEMINI_SECRET_ID)
 
 
 def enabled() -> bool:
-    return bool(LIMITS_TABLE and api_key())
+    return bool(LIMITS_TABLE and (gemini_key() or api_key()))
 
 
 def count_use(key: str, period: str = "hour") -> int:
@@ -125,11 +149,65 @@ def limit_message(visitor: str) -> str | None:
     return None
 
 
+def gemini_request(conversation: list[dict]) -> dict:
+    """The generateContent body; Gemini calls the assistant's turns "model"."""
+    return {
+        "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+        "contents": [{"role": "model" if m["role"] == "assistant" else "user", "parts": [{"text": m["content"]}]} for m in conversation],
+        "generationConfig": {"maxOutputTokens": 2048, "temperature": 0.4},
+    }
+
+
+def gemini_text(data) -> str | None:
+    """The answer from a Gemini response, or None when it was blocked, cut off empty or missing."""
+    candidates = (data or {}).get("candidates") or []
+    if not candidates or (data.get("promptFeedback") or {}).get("blockReason"):
+        return None
+    candidate = candidates[0]
+    if candidate.get("finishReason") not in ("STOP", "MAX_TOKENS", None):
+        return None
+    parts = (candidate.get("content") or {}).get("parts") or []
+    text = "".join(p["text"] for p in parts if not p.get("thought") and isinstance(p.get("text"), str)).strip()
+    return text or None
+
+
+def ask_gemini(key: str, model: str, conversation: list[dict], timeout: float) -> str:
+    response = httpx.post(
+        f"{GEMINI_URL}/{model}:generateContent",
+        headers={"x-goog-api-key": key},
+        json=gemini_request(conversation),
+        timeout=timeout,
+    )
+    try:
+        data = response.json()
+    except ValueError:
+        data = None
+    if response.is_error:
+        raise RuntimeError(f"Gemini {model} {response.status_code}: {((data or {}).get('error') or {}).get('message') or response.reason_phrase}")
+    text = gemini_text(data)
+    if not text:
+        raise RuntimeError(f"Gemini {model} gave no answer")
+    return text
+
+
 def reply(conversation: list[dict]) -> tuple[int, dict]:
-    """(status, body) for the chat window."""
+    """(status, body) for the chat window: Gemini's free models first, then Claude with the time left."""
     global _client
-    # CloudFront gives up after 30 seconds, so fail inside that window rather than retrying
-    _client = _client or anthropic.Anthropic(api_key=api_key(), timeout=24, max_retries=0)
+    deadline = time.monotonic() + TOTAL_BUDGET
+    google_key, claude_key = gemini_key(), api_key()
+    if google_key:
+        for model in GEMINI_MODELS:
+            left = deadline - time.monotonic() - (CLAUDE_MIN if claude_key else 0)
+            if left < 2:
+                break
+            try:
+                return 200, {"reply": ask_gemini(google_key, model, conversation, min(GEMINI_TIMEOUT, left))}
+            except Exception as error:
+                # Busy (503), out of free requests (429), no credits (402) or slow: next model, then Claude
+                logger.warning("Lyrbot: %s", "Gemini %s timed out" % model if isinstance(error, httpx.TimeoutException) else error)
+    if not claude_key:
+        return 503, {"error": BUSY_MESSAGE}
+    _client = _client or anthropic.Anthropic(api_key=claude_key, max_retries=0)
     try:
         message = _client.beta.messages.create(
             model=MODEL,
@@ -140,6 +218,7 @@ def reply(conversation: list[dict]) -> tuple[int, dict]:
             # Short help-desk answers; low effort keeps replies quick for a chat window
             output_config={"effort": "low"},
             messages=conversation,
+            timeout=max(CLAUDE_MIN, deadline - time.monotonic()),
         )
     except anthropic.RateLimitError:
         return 503, {"error": BUSY_MESSAGE}

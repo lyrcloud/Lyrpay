@@ -94,3 +94,71 @@ def test_off_without_a_key(chat, monkeypatch):
     response = chat.post("/api/lyrbot", json={"messages": [{"role": "user", "content": "Hi"}]})
     assert response.status_code == 503
     assert response.json()["error"] == lyrbot.FALLBACK_REPLY
+
+
+QUESTION = [{"role": "user", "content": "Is sending free?"}]
+
+
+def gemini_answer(text, finish="STOP"):
+    return {"candidates": [{"finishReason": finish, "content": {"parts": [{"text": "thinking", "thought": True}, {"text": text}]}}]}
+
+
+def test_gemini_request_and_answer():
+    body = lyrbot.gemini_request([{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello"}, {"role": "user", "content": "Fees?"}])
+    assert [c["role"] for c in body["contents"]] == ["user", "model", "user"]
+    assert body["systemInstruction"]["parts"][0]["text"] == lyrbot.SYSTEM_PROMPT
+    assert lyrbot.gemini_text(gemini_answer(" Free. ")) == "Free."
+    assert lyrbot.gemini_text(gemini_answer("x", finish="SAFETY")) is None
+    assert lyrbot.gemini_text({"promptFeedback": {"blockReason": "OTHER"}, "candidates": []}) is None
+    assert lyrbot.gemini_text(None) is None
+
+
+@pytest.fixture
+def keys(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "g-test")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+
+
+def test_gemini_answers_first(keys, monkeypatch):
+    tried = []
+
+    def ask(key, model, conversation, timeout):
+        tried.append(model)
+        return "Sending is free."
+
+    monkeypatch.setattr(lyrbot, "ask_gemini", ask)
+    monkeypatch.setattr(lyrbot.anthropic, "Anthropic", lambda **_: pytest.fail("Claude should not be asked"))
+    assert lyrbot.reply(QUESTION) == (200, {"reply": "Sending is free."})
+    assert tried == [lyrbot.GEMINI_MODELS[0]]
+
+
+def test_claude_answers_when_gemini_fails(keys, monkeypatch):
+    tried = []
+
+    def ask(key, model, conversation, timeout):
+        tried.append(model)
+        raise RuntimeError("Gemini 429: quota")
+
+    class Claude:
+        def __init__(self, **kwargs):
+            self.api_key = kwargs["api_key"]
+            self.beta = self
+            self.messages = self
+
+        def create(self, **kwargs):
+            assert kwargs["timeout"] >= lyrbot.CLAUDE_MIN
+            return type("M", (), {"stop_reason": "end_turn", "content": [type("B", (), {"type": "text", "text": "From Claude."})()]})()
+
+    monkeypatch.setattr(lyrbot, "ask_gemini", ask)
+    monkeypatch.setattr(lyrbot.anthropic, "Anthropic", Claude)
+    monkeypatch.setattr(lyrbot, "_client", None)
+    assert lyrbot.reply(QUESTION) == (200, {"reply": "From Claude."})
+    assert tried == lyrbot.GEMINI_MODELS
+
+
+def test_busy_when_gemini_fails_and_there_is_no_claude_key(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "g-test")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr(lyrbot, "SECRET_ID", "")
+    monkeypatch.setattr(lyrbot, "ask_gemini", lambda *a: (_ for _ in ()).throw(RuntimeError("down")))
+    assert lyrbot.reply(QUESTION) == (503, {"error": lyrbot.BUSY_MESSAGE})
