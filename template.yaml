@@ -35,8 +35,8 @@ Parameters:
     Description: Secrets Manager secret holding the Anthropic API key Lyrbot falls back to when Gemini can't answer (shared with Lyrcloud, Lyrshop and Lyrsoft).
   GeminiSecretName:
     Type: String
-    Default: lyrpay/gemini
-    Description: Secrets Manager secret holding the Google Gemini API key Lyrbot tries first. Until it exists, Claude answers everything.
+    Default: lyrsoft/gemini
+    Description: Secrets Manager secret holding the Google Gemini API key Lyrbot tries first (shared with the other Lyr sites). Until it exists, Claude answers everything.
 
 Conditions:
   HasDomain: !Not [!Equals [!Ref CertificateArn, '']]

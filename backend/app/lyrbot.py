@@ -32,8 +32,8 @@ LYR_CHAT_URL = "https://lyrsoft.com/chat/#/new?to=support&site=Lyrpay"
 
 # Shared with Lyrcloud, Lyrshop and Lyrsoft; ANTHROPIC_API_KEY wins (local dev)
 SECRET_ID = os.getenv("ANTHROPIC_SECRET_ID", "lyrshop/anthropic")
-# Lyrpay's own Gemini key; GEMINI_API_KEY wins (local dev). Until the secret exists, Claude answers everything.
-GEMINI_SECRET_ID = os.getenv("GEMINI_SECRET_ID", "lyrpay/gemini")
+# Gemini key shared by the Lyr sites; GEMINI_API_KEY wins (local dev). Until the secret exists, Claude answers everything.
+GEMINI_SECRET_ID = os.getenv("GEMINI_SECRET_ID", "lyrsoft/gemini")
 # Use counters, keyed { pk: "lyrbot#<ip>" | "lyrbot#all", sk: <hour> | <day> }, expired by TTL
 LIMITS_TABLE = os.getenv("LYRBOT_LIMITS_TABLE", "")
 KEY_FOR = 300
