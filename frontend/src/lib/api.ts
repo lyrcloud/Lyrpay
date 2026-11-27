@@ -202,7 +202,9 @@ const post = <T>(path: string, body: unknown) => request<T>(path, { method: 'POS
 
 export const api = {
   config: () => request<{ cardPayments: boolean; fxFeeBps: number }>('/config'),
-  track: (number: string) => request<{ tx: Transaction }>(`/track/${encodeURIComponent(number)}`),
+  // Amounts always as text, like the statement's lines, so the wallet's code never meets a number
+  track: (number: string) => request<{ tx: Transaction }>(`/track/${encodeURIComponent(number)}`)
+    .then(r => ({ tx: { ...r.tx, amount: String(r.tx.amount), ...(r.tx.toAmount != null ? { toAmount: String(r.tx.toAmount) } : {}) } })),
   me: () => request<{ profile: Profile; admin: boolean; business: Business | null; kyc: Kyc; frozen: boolean } & Statement>('/me'),
   updateProfile: (fields: Partial<Pick<Profile, 'currency' | 'country'>>) =>
     request<{ profile: Profile }>('/me', { method: 'PATCH', body: JSON.stringify(fields) }),

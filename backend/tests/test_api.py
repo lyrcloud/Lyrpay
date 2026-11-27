@@ -193,7 +193,11 @@ def test_withdrawal_waits_while_stripe_is_short_of_funds(as_user, payouts_ready,
     assert (waiting["status"], waiting["waiting"]) == ("pending", "funds")  # still short: waits again, and says why
     number = ledger.tracking_number(waiting["id"])
     assert number.startswith("LP-") and len(number) == 22
-    assert client.get(f"/api/track/{number.lower().replace('-', ' ')}").json()["tx"]["waiting"] == "funds"  # tracking asks Stripe again
+    tracked = client.get(f"/api/track/{number.lower().replace('-', ' ')}").json()["tx"]
+    assert tracked["waiting"] == "funds"  # tracking asks Stripe again
+    # Same shape as the statement's line, amounts as text: the wallet renders both with the same code
+    assert tracked == {**client.get("/api/me").json()["transactions"][0], "attempt": tracked["attempt"]}
+    assert tracked["amount"] == "-10" and isinstance(tracked["attempt"], str)
     assert as_user(CAROL).get(f"/api/track/{number}").status_code == 404  # only its owner can track it
     client = as_user(ALICE)
     assert client.get("/api/track/LP-0000-0000-0000-0000").status_code == 404
@@ -205,7 +209,7 @@ def test_withdrawal_waits_while_stripe_is_short_of_funds(as_user, payouts_ready,
     tracked = response.json()["tx"]
     assert tracked["status"] == "paid" and "waiting" not in tracked
     assert client.get("/api/me").json()["balances"] == {"USD": "40.00"}
-    assert tries == [0, 1, 2, 3]
+    assert tries == [0, 1, 2, 3, 4]
 
 
 def test_unanswered_withdrawal_is_settled_later(as_user, payouts_ready, monkeypatch):

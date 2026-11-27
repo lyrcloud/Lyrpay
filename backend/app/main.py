@@ -1099,7 +1099,8 @@ def track(number: str, user: User = Depends(checked_user)):
         except Exception:
             logger.exception("Tracking %s: checking with the provider failed", tx["id"])
         tx = ledger.find_tx(user.sub, tx["id"]) or tx
-    return {"tx": {k: v for k, v in tx.items() if k not in ("pk", "sk", "queue")}}
+    # Shaped like a statement line (amounts as text), since the wallet shows it with the same code
+    return {"tx": {k: (str(v) if isinstance(v, Decimal) else v) for k, v in tx.items() if k not in ("pk", "sk", "queue")}}
 
 
 def settle_withdrawals(sub: str, profile: dict):
