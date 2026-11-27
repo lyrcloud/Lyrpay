@@ -102,6 +102,11 @@ export type AdminLines = {
   apps: { id: string; name: string }[];
 };
 
+export type DuplicateGroup = {
+  reason: string;
+  accounts: { sub: string; name: string; email: string; phone: string; country: string; dob: string; balances: Record<string, string> }[];
+};
+
 export type CouponAudience = 'everyone' | 'business' | 'personal';
 
 export type Coupon = {
@@ -277,6 +282,9 @@ export const api = {
     post<{ sentTo: string } & Statement>('/transfer', { to, amount, currency, note }),
   payouts: () => request<Payouts>('/payouts'),
   onboardPayouts: () => post<{ url: string }>('/payouts/onboard', {}),
+  adminDuplicates: () => request<{ groups: DuplicateGroup[] }>('/admin/duplicates'),
+  adminMerge: (source: string, target: string, reason: string) =>
+    post<{ merged: { source: string; target: string; balances: Record<string, string>; points: number } }>('/admin/merge', { source, target, reason }),
   adminTransactions: (filters: Record<string, string>) => request<AdminLines>(`/admin/transactions?${new URLSearchParams(filters)}`),
   adminAccount: (sub: string) => request<{ account: AdminAccount }>(`/admin/users/${encodeURIComponent(sub)}`),
   adminEditAccount: (sub: string, fields: Record<string, unknown>, reason = '') =>

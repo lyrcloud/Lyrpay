@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, type AdminOverview, type Transaction } from '../lib/api';
 import { countryName, flag, formatDate, formatMoney } from '../lib/format';
 import AdminAccount, { AuditLog } from './AdminAccount';
+import AdminDuplicates from './AdminDuplicates';
 import AdminTransactions from './AdminTransactions';
 import AdminApps from './AdminApps';
 import { Businesses, Coupons, Settings } from './AdminRewards';
@@ -125,7 +126,7 @@ function KindBreakdown({ byKind }: { byKind: AdminOverview['byKind'] }) {
 
 type SortKey = 'created' | 'name' | 'heldUsd' | 'country';
 
-type Section = 'overview' | 'transactions' | 'coupons' | 'businesses' | 'settings' | 'apps' | 'audit';
+type Section = 'overview' | 'transactions' | 'duplicates' | 'coupons' | 'businesses' | 'settings' | 'apps' | 'audit';
 
 export default function Admin() {
   const [section, setSection] = useState<Section>('overview');
@@ -133,15 +134,16 @@ export default function Admin() {
   return (
     <div className="admin">
       <nav className="admin-nav" aria-label="Admin sections">
-        {(['overview', 'transactions', 'coupons', 'businesses', 'settings', 'apps', 'audit'] as Section[]).map(s => (
+        {(['overview', 'transactions', 'duplicates', 'coupons', 'businesses', 'settings', 'apps', 'audit'] as Section[]).map(s => (
           <button key={s} aria-current={section === s} onClick={() => setSection(s)}>
-            {{ overview: 'Overview', transactions: 'Transactions', coupons: 'Promo codes', businesses: 'Businesses', settings: 'Settings', apps: 'Lyr apps', audit: 'Audit log' }[s]}
+            {{ overview: 'Overview', transactions: 'Transactions', duplicates: 'Duplicates', coupons: 'Promo codes', businesses: 'Businesses', settings: 'Settings', apps: 'Lyr apps', audit: 'Audit log' }[s]}
             {s === 'businesses' && waiting > 0 && <span className="count">{waiting}</span>}
           </button>
         ))}
       </nav>
       {section === 'overview' && <Overview onWaiting={setWaiting} onOpen={setSection} />}
       {section === 'transactions' && <AdminTransactions />}
+      {section === 'duplicates' && <AdminDuplicates />}
       {section === 'coupons' && <Coupons />}
       {section === 'businesses' && <Businesses />}
       {section === 'settings' && <Settings />}

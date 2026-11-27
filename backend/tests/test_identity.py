@@ -78,3 +78,38 @@ def test_a_sign_in_with_its_own_wallet_keeps_it(as_user, monkeypatch):
     as_user(ALICE).get("/api/me")
     ledger.table().put_item(Item={"pk": "USER#google-alice", "sk": "PROFILE", "name": "Alice", "email": ALICE.email})
     assert identity.wallet_for("lyr", "google-alice", ALICE.email, "") == "google-alice"
+
+
+def test_admin_merges_one_persons_two_wallets(as_user, monkeypatch):
+    from decimal import Decimal
+
+    from tests.test_api import CAROL, paid_session, stripe_client
+    monkeypatch.setattr(identity, "_cache", {})
+    monkeypatch.setattr(stripe_client, "get_checkout", lambda _: paid_session("carol"))
+    as_user(CAROL).get("/api/me")
+    as_user(ALICE).get("/api/me")
+    as_user(CAROL).post("/api/topup/confirm", json={"sessionId": "cs_merge_1"})  # Carol: $50
+    monkeypatch.setattr(stripe_client, "get_checkout", lambda _: paid_session("alice"))
+    as_user(ALICE).post("/api/topup/confirm", json={"sessionId": "cs_merge_2"})  # Alice: $50
+    ledger.update_profile("carol", pointsBalance=120)
+    identity.wallet_for("lyrcloud", "cloud-carol", "", "")  # a Lyrcloud sign-in that had its own wallet id
+    ledger.table().put_item(Item={"pk": "IDENTITY#lyrcloud#cloud-carol", "sk": "IDENTITY", "wallet": "carol", "pool": "lyrcloud", "linkedBy": "email"})
+
+    admin = as_user(ADMIN)
+    assert admin.post("/api/admin/merge", json={"source": "carol", "target": "alice", "reason": "x"}).status_code == 400
+    response = admin.post("/api/admin/merge", json={"source": "carol", "target": "alice", "reason": "Same person: Google and password accounts"})
+    assert response.status_code == 200, response.text
+    done = response.json()
+    assert done["merged"]["balances"] == {"USD": "50.00"} and done["merged"]["points"] == 120
+
+    assert ledger.balances("alice") == {"USD": Decimal("100")} and ledger.balances("carol") == {}
+    assert ledger.get_item("USER#alice", "PROFILE")["pointsBalance"] == 120
+    carol = ledger.get_item("USER#carol", "PROFILE")
+    assert carol["mergedInto"] == "alice" and carol["frozen"] is True
+    # Every way of reaching Carol now reaches Alice's wallet: her own sign-in, her Lyrcloud sign-in, her email
+    monkeypatch.setattr(identity, "_cache", {})
+    assert identity.wallet_for("lyr", "carol", "", "") == "alice"
+    assert identity.wallet_for("lyrcloud", "cloud-carol", "", "") == "alice"
+    assert ledger.get_item(f"HANDLE#{CAROL.email}", "HANDLE")["sub"] == "alice"
+    assert admin.post("/api/admin/merge", json={"source": "carol", "target": "alice", "reason": "again please"}).status_code == 400
+    assert as_user(ALICE).post("/api/admin/merge", json={"source": "a", "target": "b", "reason": "nope nope"}).status_code == 403

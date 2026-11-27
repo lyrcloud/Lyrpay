@@ -315,3 +315,64 @@ def all_transactions(q: str = "", kind: str = "", status: str = "", app: str = "
             })
     totals = {k: (str(v) if isinstance(v, Decimal) else v) for k, v in totals.items()}
     return {"transactions": out, "totals": totals, "apps": [{"id": k, "name": v} for k, v in sorted(app_names.items())]}
+
+
+# ── Merging two wallets of one person ────────────────────────────────────────
+
+def merge_accounts(admin: str, source: str, target: str, reason: str) -> dict:
+    """Move everything in wallet `source` into wallet `target` (the same person's two accounts), in one transaction:
+    each balance and the points, with a statement line on both sides; the source's email and phone handles and every
+    sign-in that reached it now reach the target; the source is frozen and marked as merged. Its history stays on it
+    for the record. Refused while the source has a withdrawal or top-up on its way."""
+    from boto3.dynamodb.conditions import Attr
+    reason = (reason or "").strip()
+    if len(reason) < 5:
+        raise ValueError("Say why these are the same person (at least a few words).")
+    if source == target:
+        raise ValueError("Pick two different accounts.")
+    if source.startswith("merchant_") or target.startswith("merchant_"):
+        raise ValueError("A Lyr app's own account can't be merged.")
+    src, dst = ledger.get_item(f"USER#{source}", "PROFILE"), ledger.get_item(f"USER#{target}", "PROFILE")
+    if not src or not dst:
+        raise NotFound("No Lyrpay account with that id.")
+    if src.get("mergedInto") or dst.get("mergedInto"):
+        raise ValueError("One of these accounts was already merged into another.")
+    if ledger.pending(source, "withdraw", 0) or ledger.pending(source, "topup", 0):
+        raise ValueError("The account being merged has a withdrawal or top-up on its way. Merge once it has settled.")
+
+    ops, moved = [], {}
+    label = src.get("email") or src.get("phone") or source
+    for currency, amount in ledger.balances(source).items():
+        moved[currency] = str(amount)
+        ops += [
+            {"Update": {"TableName": ledger.TABLE_NAME, "Key": {"pk": f"USER#{source}", "sk": f"BAL#{currency}"},
+                        "UpdateExpression": "SET amount = amount - :a", "ConditionExpression": "amount = :a",
+                        "ExpressionAttributeValues": {":a": amount}}},
+            ledger._credit(target, currency, amount),
+            ledger._put(ledger._tx_item(source, "adjust", currency, -amount, note="Moved to your other Lyrpay account (accounts merged)")),
+            ledger._put(ledger._tx_item(target, "adjust", currency, amount, note=f"Moved from your other Lyrpay account {label} (accounts merged)")),
+        ]
+    points = int(src.get("pointsBalance") or 0)
+    ops += [
+        {"Update": {"TableName": ledger.TABLE_NAME, "Key": {"pk": f"USER#{source}", "sk": "PROFILE"},
+                    "UpdateExpression": "SET mergedInto = :t, frozen = :f, frozenReason = :r, pointsBalance = :z",
+                    "ConditionExpression": "attribute_not_exists(mergedInto)",
+                    "ExpressionAttributeValues": {":t": target, ":f": True, ":r": f"Merged into account {target}", ":z": 0}}},
+        {"Update": {"TableName": ledger.TABLE_NAME, "Key": {"pk": f"USER#{target}", "sk": "PROFILE"},
+                    "UpdateExpression": "SET pointsBalance = if_not_exists(pointsBalance, :z) + :p, mergedFrom = list_append(if_not_exists(mergedFrom, :e), :s)",
+                    "ExpressionAttributeValues": {":p": points, ":z": 0, ":e": [], ":s": [source]}}},
+    ]
+    # Paying the source's email or phone now pays the target; its sign-ins now open the target
+    for handle in {str(src.get("email") or "").lower(), str(src.get("phone") or "")} - {""}:
+        owner = ledger.get_item(f"HANDLE#{handle}", "HANDLE")
+        if owner and owner.get("sub") == source:
+            ops.append(ledger._put({"pk": f"HANDLE#{handle}", "sk": "HANDLE", "sub": target}))
+    for item in ledger._scan(FilterExpression=Attr("sk").eq("IDENTITY") & Attr("wallet").eq(source)):
+        ops.append(ledger._put({**item, "wallet": target, "linkedBy": "merge", "mergedAt": ledger._now()}))
+    for pool in ("lyr", "lyrcloud"):
+        ops.append(ledger._put({"pk": f"IDENTITY#{pool}#{source}", "sk": "IDENTITY", "wallet": target, "pool": pool,
+                                "linkedBy": "merge", "at": ledger._now()}))
+    summary = {"source": source, "target": target, "balances": moved, "points": points}
+    ops.append(ledger._put(_audit_item(admin, "account.merge", target, {"source": _plain(src)}, summary, reason)))
+    ledger._transact(ops, ValueError("The account changed while merging. Look again and retry."))
+    return summary

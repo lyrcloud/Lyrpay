@@ -1037,3 +1037,16 @@ input, select, textarea { transition: border-color 0.2s ease, box-shadow 0.2s ea
 @media (max-width: 1180px) and (min-width: 821px) {
   .nav button { padding: 8px 9px; }
 }
+
+/* Admin duplicates */
+.dup-groups { display: grid; gap: 14px; margin-top: 12px; }
+.dup-group { border: 1px solid var(--border); border-radius: 14px; padding: 14px; display: grid; gap: 10px; animation: rise 0.3s ease both; }
+.dup-group > .badge { justify-self: start; }
+.dup-accounts { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
+.dup-accounts li { display: flex; flex-direction: column; gap: 4px; padding: 12px; border-radius: 12px; background: var(--surface-2); border: 2px solid transparent; transition: border-color 0.2s ease, transform 0.2s ease; min-width: 0; }
+.dup-accounts li.keep { border-color: var(--positive); transform: translateY(-2px); }
+.dup-accounts li span { overflow-wrap: anywhere; }
+.dup-pick { display: inline-flex; align-items: center; gap: 6px; font-size: 0.82rem; font-weight: 600; color: var(--positive); }
+.dup-pick input { width: auto; }
+.dup-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.dup-actions input { flex: 1; min-width: 240px; }

@@ -13,6 +13,7 @@ them): they only flag possible duplicates for the super admin to review (possibl
 """
 import logging
 import re
+import time
 import unicodedata
 
 from app import ledger
@@ -23,7 +24,9 @@ logger = logging.getLogger("lyrpay")
 LYR = "lyr"
 LYRCLOUD = "lyrcloud"
 
-_cache: dict[tuple[str, str], str] = {}
+# Kept briefly per instance: a merge re-points identities, and every instance must see it within a minute
+CACHE_SECONDS = 60
+_cache: dict[tuple[str, str], tuple[str, float]] = {}
 
 
 def _key(pool: str, sub: str) -> dict:
@@ -33,11 +36,11 @@ def _key(pool: str, sub: str) -> dict:
 def wallet_for(pool: str, sub: str, email: str, phone: str) -> str:
     """The wallet id for this sign-in identity, linking it on first sight by verified email or phone."""
     cached = _cache.get((pool, sub))
-    if cached:
-        return cached
+    if cached and time.monotonic() - cached[1] < CACHE_SECONDS:
+        return cached[0]
     item = ledger.table().get_item(Key=_key(pool, sub)).get("Item")
     if item:
-        _cache[(pool, sub)] = item["wallet"]
+        _cache[(pool, sub)] = (item["wallet"], time.monotonic())
         return item["wallet"]
     wallet, linked_by = sub, "new"
     # A sign-in that already has its own wallet keeps it: re-pointing it would hide that wallet's money
@@ -62,7 +65,7 @@ def wallet_for(pool: str, sub: str, email: str, phone: str) -> str:
         wallet = ledger.table().get_item(Key=_key(pool, sub), ConsistentRead=True)["Item"]["wallet"]
     if linked_by != "new":
         logger.info("Identity %s/%s joined wallet %s by verified %s", pool, sub, wallet, linked_by)
-    _cache[(pool, sub)] = wallet
+    _cache[(pool, sub)] = (wallet, time.monotonic())
     return wallet
 
 
@@ -88,7 +91,7 @@ def possible_duplicates() -> list[dict]:
         if len(name) < 3:
             continue
         sub = profile["pk"].removeprefix("USER#")
-        if sub.startswith("merchant_"):
+        if sub.startswith("merchant_") or profile.get("mergedInto"):
             continue
         brief = {"sub": sub, "name": profile.get("name", ""), "email": profile.get("email", ""),
                  "phone": profile.get("phone", ""), "country": profile.get("country", ""), "dob": profile.get("dob", "")}
@@ -97,4 +100,8 @@ def possible_duplicates() -> list[dict]:
         digits = re.sub(r"\D", "", str(profile.get("phone") or ""))[-9:]
         if digits:
             groups.setdefault(("name+phone", name, digits), []).append(brief)
-    return [{"reason": reason, "accounts": accounts} for (reason, *_), accounts in groups.items() if len(accounts) > 1]
+    found = [{"reason": reason, "accounts": accounts} for (reason, *_), accounts in groups.items() if len(accounts) > 1]
+    for group in found:
+        for account in group["accounts"]:
+            account["balances"] = {c: str(a) for c, a in ledger.balances(account["sub"]).items()}
+    return found

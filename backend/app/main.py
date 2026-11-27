@@ -1890,6 +1890,18 @@ def admin_duplicates(_: User = Depends(admin_user)):
     return {"groups": identity.possible_duplicates()}
 
 
+class AccountMerge(BaseModel):
+    source: str
+    target: str
+    reason: str
+
+
+@app.post("/api/admin/merge")
+def admin_merge(body: AccountMerge, admin: User = Depends(admin_user)):
+    """Move one wallet into another of the same person (balances, points, handles, sign-ins), audited."""
+    return {"merged": admin_ops.merge_accounts(admin.email, body.source.strip(), body.target.strip(), body.reason)}
+
+
 @app.get("/api/admin/transactions")
 def admin_transactions(q: str = "", kind: str = "", status: str = "", app: str = "", days: int = 30,
                        _: User = Depends(admin_user)):
