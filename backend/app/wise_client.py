@@ -8,6 +8,7 @@ import base64
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from decimal import Decimal
@@ -179,10 +180,19 @@ def quote(*, target: str, source_amount: Decimal, recipient: int | None = None) 
     if recipient:
         body["targetAccount"] = recipient
     found = _request("POST", f"/v3/profiles/{profile_id()}/quotes", body)
-    options = [o for o in found.get("paymentOptions", []) if o.get("payIn") == "BALANCE" and not o.get("disabled")]
+    balance = [o for o in found.get("paymentOptions", []) if o.get("payIn") == "BALANCE"]
+    options = [o for o in balance if not o.get("disabled")]
     option = next((o for o in options if o.get("payOut") == found.get("payOut")), options[0] if options else None)
     if not option:
-        raise WiseError(f"Wise can't send {target.upper()} from the Lyrpay balance right now.", definitive=True)
+        # Say why: Wise's own reason for the balance option (too small for the fee, or Lyrpay's Wise balance is short)
+        why = next((((o.get("disabledReason") or {}).get("message") or "") for o in balance if o.get("payOut") == found.get("payOut")),
+                   ((balance[0].get("disabledReason") or {}).get("message") or "") if balance else "")
+        if re.search(r"don't have (any|enough)", why, re.IGNORECASE):
+            logger.warning("Lyrpay's Wise balance can't cover a %s %s payout: fund the Wise %s balance (%s)",
+                           source_amount, target.upper(), source(), why)
+            raise WiseError("Wise payouts are paused while Lyrpay adds funds to its Wise account. Your money stays on "
+                            "your balance; try again later or withdraw in USD to your bank.", definitive=True, code="unfunded")
+        raise WiseError(why or f"Wise can't send {target.upper()} right now.", definitive=True, code="disabled")
     return {"id": found["id"], "fee": Decimal(str(option["fee"]["total"])), "receive": Decimal(str(option["targetAmount"])),
             "rate": Decimal(str(found.get("rate", 1))), "warning": (found.get("notices") or [{}])[0].get("text", "")}
 

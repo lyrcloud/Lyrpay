@@ -140,3 +140,22 @@ def test_live_wise_is_for_everyone(as_user, wise, monkeypatch):
     # The secret's old admins_only trial flag no longer hides live Wise from customers
     monkeypatch.setattr(wise_client, "admins_only", lambda: True)
     assert main.wise_payouts("someone@example.com") and main.wise_payouts("")
+
+
+def test_quote_says_why_wise_cannot_pay(monkeypatch):
+    import pytest
+    monkeypatch.setattr(wise_client, "profile_id", lambda: 1)
+    monkeypatch.setattr(wise_client, "source", lambda: "USD")
+
+    def answer(reason):
+        option = {"payIn": "BALANCE", "payOut": "BANK_TRANSFER", "disabled": True, "disabledReason": {"message": reason},
+                  "fee": {"total": 7.28}, "targetAmount": 0}
+        monkeypatch.setattr(wise_client, "_request", lambda *a, **k: {"id": "q", "payOut": "BANK_TRANSFER", "paymentOptions": [option]})
+
+    answer("The smallest amount you can send is 7.29 USD.")
+    with pytest.raises(wise_client.WiseError, match="smallest amount you can send is 7.29"):
+        wise_client.quote(target="USD", source_amount=Decimal("1.94"))
+    answer("You don't have any USD in your account.")
+    with pytest.raises(wise_client.WiseError, match="paused while Lyrpay adds funds") as raised:
+        wise_client.quote(target="USD", source_amount=Decimal("50"))
+    assert raised.value.code == "unfunded"
