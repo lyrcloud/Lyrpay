@@ -197,8 +197,8 @@ def test_withdrawal_waits_while_stripe_is_short_of_funds(as_user, payouts_ready,
     tracked = client.get(f"/api/track/{number.lower().replace('-', ' ')}").json()["tx"]
     assert tracked["waiting"] == "funds"  # tracking asks Stripe again
     # Same shape as the statement's line, amounts as text: the wallet renders both with the same code
-    assert tracked == {**client.get("/api/me").json()["transactions"][0], "attempt": tracked["attempt"]}
-    assert tracked["amount"] == "-10" and isinstance(tracked["attempt"], str)
+    assert tracked == client.get("/api/me").json()["transactions"][0]
+    assert tracked["amount"] == "-10" and "attempt" not in tracked and "reference" not in tracked
     assert as_user(CAROL).get(f"/api/track/{number}").status_code == 404  # only its owner can track it
     client = as_user(ALICE)
     assert client.get("/api/track/LP-0000-0000-0000-0000").status_code == 404
@@ -234,7 +234,7 @@ def test_unanswered_withdrawal_is_settled_later(as_user, payouts_ready, monkeypa
     monkeypatch.setattr(stripe_client, "find_transfer", lambda account, reference: {"id": "tr_found"} if reference == tx_id else None)
     monkeypatch.setattr(stripe_client, "transfer_to", lambda *args: sent.append(args) or {"id": "tr_new"})
     me = client.get("/api/me").json()
-    assert me["transactions"][0]["status"] == "paid" and me["transactions"][0]["reference"] == "tr_found"
+    assert me["transactions"][0]["status"] == "paid" and me["transactions"][0]["sent"] is True
     assert sent == [] and me["balances"] == {"USD": "40.00"}
 
 
@@ -1064,3 +1064,46 @@ def test_stripe_clash_and_rate_limit_are_not_refusals(monkeypatch):
             stripe_client._request("POST", "/transfers", {})
         except stripe_client.StripeError as error:
             assert error.definitive is (status == 400), (status, code)
+
+
+def test_short_stripe_balance_sends_at_once_from_the_persons_top_up(as_user, payouts_ready, monkeypatch):
+    """With Lyrpay's available balance too low, the withdrawal is paid from the person's own card top-up
+    (source_transaction): Stripe makes the transfer at once and funds it when the top-up clears."""
+    made = []
+
+    def transfer(account, amount, currency, reference, attempt=0, source_transaction=None):
+        if not source_transaction:
+            raise stripe_client.StripeError("Insufficient funds in Stripe account.", definitive=True, code="balance_insufficient")
+        if source_transaction == "ch_small":
+            raise stripe_client.StripeError("The source_transaction amount is too small.", definitive=True)
+        made.append((amount, source_transaction))
+        return {"id": "tr_from_topup"}
+    charges = {"cs_test_src2": {"id": "ch_big", "amount": 5000, "currency": "usd"},
+               "cs_test_src1": {"id": "ch_small", "amount": 5000, "currency": "usd"}}
+    monkeypatch.setattr(stripe_client, "transfer_to", transfer)
+    monkeypatch.setattr(stripe_client, "checkout_charge", lambda session: charges.get(session))
+    client = as_user(ALICE)
+    client.post("/api/topup/confirm", json={"sessionId": "cs_test_src2"})
+    monkeypatch.setattr(stripe_client, "get_checkout", lambda _: {**paid_session("alice"), "id": "cs_test_src1"})
+    client.post("/api/topup/confirm", json={"sessionId": "cs_test_src1"})  # newest: Stripe says it can't fund more
+    client.patch("/api/me", json={"country": "US"})
+    client.post("/api/payouts/onboard")
+    result = client.post("/api/withdraw", json={"amount": "10"}).json()
+    assert result["status"] == "paid" and made == [(Decimal("10"), "ch_big")]
+    line = client.get("/api/me").json()["transactions"][0]
+    # The person sees it was handed over, never the provider or its reference
+    assert line["sent"] is True and "reference" not in line and "rail" not in line
+
+
+def test_provider_details_are_for_the_super_admin_only(as_user, payouts_ready, monkeypatch):
+    monkeypatch.setattr(stripe_client, "transfer_to", lambda *a, **k: {"id": "tr_admin"})
+    monkeypatch.setattr(stripe_client, "get_checkout", lambda _: paid_session("admin"))
+    admin = as_user(ADMIN)
+    admin.post("/api/topup/confirm", json={"sessionId": "cs_test_adm"})
+    admin.patch("/api/me", json={"country": "US"})
+    admin.post("/api/payouts/onboard")
+    admin.post("/api/withdraw", json={"amount": "10"})
+    line = admin.get("/api/me").json()["transactions"][0]
+    assert line["reference"] == "tr_admin" and line["sent"] is True
+    tracked = admin.get(f"/api/track/{ledger.tracking_number(line['id'])}").json()["tx"]
+    assert tracked["reference"] == "tr_admin"

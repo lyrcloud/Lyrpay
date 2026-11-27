@@ -4,6 +4,7 @@ import { formatMoney, trackingNumber } from '../lib/format';
 import Logo, { SiteFooter } from './Logo';
 
 const REFRESH_MS = 10000;
+const RAIL: Record<string, string> = { wise: 'Wise', plaid: 'Plaid', stripe: 'Stripe' };
 
 type Step = { label: string; icon: string };
 
@@ -18,7 +19,7 @@ function progress(tx: Transaction): { steps: Step[]; reached: number; title: str
     ];
     if (failed) return { steps, reached: 4, tone: 'failed', title: 'Returned to your balance', note: "This withdrawal didn't go through, so the money is back on your Lyrpay balance." };
     if (done) return { steps, reached: 4, tone: 'done', title: 'Paid out', note: 'It has left Lyrpay. Banks usually show it within 1 to 3 business days.' };
-    if (tx.reference) return { steps, reached: 2, tone: 'moving', title: 'With your bank', note: 'Your bank has it. Banks usually take 1 to 3 business days to show it.' };
+    if (tx.sent || tx.reference) return { steps, reached: 2, tone: 'moving', title: 'With your bank', note: 'Your bank has it. Banks usually take 1 to 3 business days to show it.' };
     return {
       steps, reached: 1, tone: 'moving', title: 'Sending',
       note: tx.waiting === 'funds'
@@ -121,6 +122,8 @@ export default function TrackPage({ number, onDone }: { number: string; onDone: 
               <div><dt>Tracking number</dt><dd><button className="link mono" onClick={() => copy(trackingNumber(tx.id))} title="Copy">{trackingNumber(tx.id)} {copied ? '✓' : '⧉'}</button></dd></div>
               <div><dt>Started</dt><dd>{new Date(tx.at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}</dd></div>
               {tx.note && <div><dt>Note</dt><dd>{tx.note}</dd></div>}
+              {tx.rail && <div className="admin-only"><dt>Provider ★</dt><dd>{RAIL[tx.rail] ?? tx.rail}</dd></div>}
+              {tx.reference && <div className="admin-only"><dt>Provider reference ★</dt><dd className="mono">{tx.reference}</dd></div>}
             </dl>
             {live && <p className="hint center">This page updates by itself, and we'll email you when it moves.</p>}
           </section>

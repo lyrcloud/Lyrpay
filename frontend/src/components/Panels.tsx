@@ -29,11 +29,11 @@ function Tracking({ tx }: { tx: Transaction }) {
   let note = '';
   if (tx.kind === 'withdraw') {
     steps = ['Requested', 'Sending', 'With your bank', failed ? 'Returned to your balance' : 'Paid out'];
-    reached = done ? 4 : tx.reference ? 2 : 1;
+    reached = done ? 4 : tx.sent || tx.reference ? 2 : 1;
     if (!done) {
       note = tx.waiting === 'funds'
         ? "Waiting for Lyrpay's payout funds to clear. It goes out automatically, usually within 2 business days, and we'll email you."
-        : tx.reference ? 'Your bank has it. Banks usually take 1 to 3 business days to show it.' : "We're sending it now.";
+        : tx.sent || tx.reference ? 'Your bank has it. Banks usually take 1 to 3 business days to show it.' : "We're sending it now.";
     }
   } else {
     steps = ['Started', 'On its way from your bank', failed ? "Your bank didn't pay" : 'Added to your balance'];
@@ -77,11 +77,12 @@ export function Details({ tx: initial }: { tx: Transaction }) {
   if (tx.counterparty) rows.push([tx.amount.startsWith('-') ? 'To' : 'From', tx.counterparty]);
   if (tx.note) rows.push(['Note', tx.note]);
   rows.push(['Status', tx.status === 'pending' ? 'Processing' : tx.status === 'failed' ? 'Failed, nothing was taken' : 'Completed']);
-  if (extra.rail) rows.push(['Paid out through', RAIL[extra.rail] ?? extra.rail]);
+  // Only the super admin's API answers carry the provider and its reference
+  if (tx.rail) rows.push(['Provider ★', RAIL[tx.rail] ?? tx.rail]);
   rows.push(['Date', new Date(tx.at).toLocaleString(undefined, { dateStyle: 'full', timeStyle: 'medium' })]);
   if (tx.batch) rows.push(['Batch', 'Part of a bulk payment']);
   rows.push(['Tracking number', trackingNumber(tx.id)]);
-  if (tx.reference) rows.push(['Provider reference', tx.reference]);
+  if (tx.reference) rows.push(['Provider reference ★', tx.reference]);
   return (
     <div className="tx-details">
       {moving && <span className="badge live">● Live</span>}

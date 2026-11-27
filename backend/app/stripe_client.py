@@ -176,14 +176,32 @@ def onboarding_link(account_id: str, origin: str) -> str:
     })["url"]
 
 
-def transfer_to(account_id: str, amount: Decimal, currency: str, reference: str, attempt: int = 0) -> dict:
-    """attempt: a fresh key for each try after Stripe was short of funds, since Stripe replays a key's answer for 24 hours."""
-    return _request("POST", "/transfers", {
+def transfer_to(account_id: str, amount: Decimal, currency: str, reference: str, attempt: int = 0,
+                source_transaction: str | None = None) -> dict:
+    """attempt: a fresh key for each try after Stripe was short of funds, since Stripe replays a key's answer for 24 hours.
+    source_transaction: a charge (a card top-up) to pay it from. Stripe then makes the transfer at once, even before the
+    charge's money is available, and the funds reach the account when the charge clears."""
+    data = {
         "amount": stripe_amount(amount, currency),
         "currency": currency.lower(),
         "destination": account_id,
         "metadata[lyrpay_tx]": reference,
-    }, idempotency_key=f"lyrpay-withdraw-{reference}" + (f"-{attempt}" if attempt else ""))
+    }
+    key = f"lyrpay-withdraw-{reference}" + (f"-{attempt}" if attempt else "")
+    if source_transaction:
+        data["source_transaction"] = source_transaction
+        key = f"lyrpay-withdraw-{reference}-src-{source_transaction}"
+    return _request("POST", "/transfers", data, idempotency_key=key)
+
+
+def checkout_charge(session_id: str) -> dict | None:
+    """The card charge behind a paid Checkout session: {id, amount (minor units), currency}, or None (unpaid, no charge)."""
+    session = _request("GET", f"/checkout/sessions/{session_id}", params={"expand[]": "payment_intent.latest_charge"})
+    intent = session.get("payment_intent")
+    charge = intent.get("latest_charge") if isinstance(intent, dict) else None
+    if not isinstance(charge, dict) or charge.get("status") != "succeeded":
+        return None
+    return {"id": charge["id"], "amount": charge["amount"] - charge.get("amount_refunded", 0), "currency": charge["currency"]}
 
 
 def find_transfer(account_id: str, reference: str) -> dict | None:

@@ -16,6 +16,7 @@ export type Transaction = {
   amount: string;
   status?: 'pending' | 'paid' | 'failed';
   waiting?: 'funds';
+  sent?: boolean;
   rail?: string;
   counterparty?: string;
   note?: string;

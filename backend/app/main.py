@@ -107,13 +107,25 @@ def money(amount: Decimal, currency: str) -> str:
     return str(quantize(amount, currency))
 
 
-def statement(sub: str) -> dict:
+# What a payment provider calls a withdrawal or top-up (Stripe transfer, Wise or Plaid transfer, Checkout session) and
+# which provider carried it: for the super admin only. Everyone else sees whether it has been handed to the bank.
+ADMIN_ONLY = ("reference", "rail", "attempt", "recipient", "source")
+
+
+def public_line(tx: dict, admin: bool = False) -> dict:
+    line = {k: (str(v) if isinstance(v, Decimal) else v) for k, v in tx.items() if k not in ledger.INTERNAL}
+    if tx.get("kind") == "withdraw" and tx.get("reference"):
+        line["sent"] = True
+    if not admin:
+        for key in ADMIN_ONLY:
+            line.pop(key, None)
+    return line
+
+
+def statement(sub: str, admin: bool = False) -> dict:
     return {
         "balances": {c: money(a, c) for c, a in sorted(ledger.balances(sub).items())},
-        "transactions": [
-            {k: (str(v) if isinstance(v, Decimal) else v) for k, v in tx.items()}
-            for tx in ledger.transactions(sub)
-        ],
+        "transactions": [public_line(tx, admin) for tx in ledger.transactions(sub)],
     }
 
 
@@ -196,7 +208,7 @@ def me(user: User = Depends(checked_user)):
         "business": rewards.public_business(profile.get("business")),
         "kyc": kyc.public(profile.get("kyc")),
         "frozen": bool(profile.get("frozen")),
-        **statement(user.sub),
+        **statement(user.sub, is_admin(user)),
     }
 
 
@@ -573,7 +585,7 @@ def confirm_paypal(user: User, ref: str) -> dict:
     currency, amount = record["currency"], Decimal(record["amount"])
     if ledger.get_item(f"TOPUP#{ref}", "TOPUP"):  # credited already: say so without asking PayPal
         return {"credited": False, "currency": currency, "amount": money(amount, currency), "bonus": money(Decimal(0), currency),
-                "couponNote": "", **statement(user.sub)}
+                "couponNote": "", **statement(user.sub, is_admin(user))}
     order = paypal_call(paypal_client.get_order, order_id)
     if order.get("status") == "APPROVED":
         try:
@@ -594,8 +606,8 @@ def confirm_paypal(user: User, ref: str) -> dict:
         raise HTTPException(status_code=409, detail="PayPal declined the payment. Nothing was added.")
     if outcome == "pending":
         return {"credited": False, "pending": True, "currency": currency, "amount": money(amount, currency),
-                "bonus": money(Decimal(0), currency), "couponNote": "", **statement(user.sub)}
-    return {**credit_payment(user.sub, ref, currency, amount, record.get("coupon", ""), "PayPal"), **statement(user.sub)}
+                "bonus": money(Decimal(0), currency), "couponNote": "", **statement(user.sub, is_admin(user))}
+    return {**credit_payment(user.sub, ref, currency, amount, record.get("coupon", ""), "PayPal"), **statement(user.sub, is_admin(user))}
 
 
 def dlocal_topups(email: str) -> bool:
@@ -678,14 +690,14 @@ def confirm_dlocal(user: User, ref: str) -> dict:
     currency, amount = record["currency"], Decimal(record["amount"])
     nothing = {"currency": currency, "amount": money(amount, currency), "bonus": money(Decimal(0), currency), "couponNote": ""}
     if ledger.get_item(f"TOPUP#{ref}", "TOPUP"):  # credited already, maybe by dLocal's notification
-        return {"credited": False, **nothing, **statement(user.sub)}
+        return {"credited": False, **nothing, **statement(user.sub, is_admin(user))}
     outcome, credited = settle_dlocal(user.sub, ref, record, dlocal_call(dlocal_client.get_payment, record["payment"]))
     if outcome == "paid":
-        return {**credited, **statement(user.sub)}
+        return {**credited, **statement(user.sub, is_admin(user))}
     if outcome == "failed":
         raise HTTPException(status_code=409, detail="dLocal didn't take the payment. Nothing was added.")
     if outcome == "pending":
-        return {"credited": False, "pending": True, "provider": "dLocal", **nothing, **statement(user.sub)}
+        return {"credited": False, "pending": True, "provider": "dLocal", **nothing, **statement(user.sub, is_admin(user))}
     raise HTTPException(status_code=409, detail="That payment hasn't completed yet.")
 
 
@@ -787,7 +799,7 @@ def topup_confirm(body: TopUpConfirm, user: User = Depends(checked_user)):
     if session.get("client_reference_id") != user.sub:
         raise HTTPException(status_code=409, detail="That payment belongs to another account.")
     if session.get("payment_status") == "paid":
-        return {**credit_checkout(user.sub, body.sessionId, session), **statement(user.sub)}
+        return {**credit_checkout(user.sub, body.sessionId, session), **statement(user.sub, is_admin(user))}
     # Bank debits (ACH) finish checkout days before the money arrives; the line waits as pending until then
     if session.get("status") == "complete" and session.get("payment_status") == "unpaid":
         currency, amount = checkout_credit(session)
@@ -885,7 +897,7 @@ def convert(body: Convert, user: User = Depends(checked_user)):
         ledger.convert(user.sub, source, amount, target, received, applied, earned)
     except ledger.InsufficientFunds:
         raise HTTPException(status_code=409, detail=f"You don't have enough {source}.")
-    return {"receive": money(received, target), **statement(user.sub)}
+    return {"receive": money(received, target), **statement(user.sub, is_admin(user))}
 
 
 def handle_of(raw: str) -> str:
@@ -929,7 +941,7 @@ def transfer(body: Transfer, user: User = Depends(checked_user)):
         ledger.transfer(user, rewards.payer_name(profile), found, currency, amount, body.note.strip()[:140])
     except ledger.InsufficientFunds:
         raise HTTPException(status_code=409, detail=f"You don't have enough {currency}.")
-    return {"sentTo": found["name"], **statement(user.sub)}
+    return {"sentTo": found["name"], **statement(user.sub, is_admin(user))}
 
 
 @app.get("/api/currencies")
@@ -991,7 +1003,13 @@ def send_withdrawal(tx: dict, profile: dict) -> str:
         if not error.definitive:
             return "pending"
         if error.code == "balance_insufficient":
-            # Lyrpay's Stripe balance is still clearing recent top-ups: the withdrawal waits and the sweep sends it later
+            # Lyrpay's Stripe balance is still clearing recent top-ups. Paid from one of the person's own card top-ups,
+            # Stripe makes the transfer at once and funds it when that top-up clears; with none that fits, it waits
+            # and the sweep sends it later
+            transfer = transfer_from_topup(tx, account_id)
+            if transfer:
+                ledger.finish_withdrawal(tx, transfer["id"])
+                return "paid"
             logger.warning("Withdrawal %s waits: Stripe's available balance is too low (%s)", tx["id"], error)
             ledger.note_attempt(tx)
             return "pending"
@@ -1000,6 +1018,33 @@ def send_withdrawal(tx: dict, profile: dict) -> str:
         return "failed"
     ledger.finish_withdrawal(tx, transfer["id"])
     return "paid"
+
+
+TOPUPS_TO_TRY = 5
+
+
+def transfer_from_topup(tx: dict, account_id: str) -> dict | None:
+    """A Stripe transfer for this withdrawal paid from one of the person's own recent card top-ups (source_transaction),
+    so it exists in Stripe at once; None when no top-up in the same currency covers it or Stripe takes none of them."""
+    sub, amount, currency = tx["pk"].removeprefix("USER#"), -tx["amount"], tx["currency"]
+    needed = stripe_client.stripe_amount(amount, currency)
+    topups = [t for t in ledger.transactions(sub, 100)
+              if t["kind"] == "topup" and t.get("status", "paid") == "paid" and t["currency"] == currency
+              and str(t.get("reference", "")).startswith("cs_") and t["amount"] >= amount]
+    for topup in topups[:TOPUPS_TO_TRY]:
+        try:
+            charge = stripe_client.checkout_charge(topup["reference"])
+            if not charge or charge["currency"] != currency.lower() or charge["amount"] < needed:
+                continue
+            transfer = stripe_client.transfer_to(account_id, amount, currency, tx["id"], source_transaction=charge["id"])
+        except stripe_client.StripeError as error:
+            if not error.definitive:
+                return None  # unknown: ask again next time rather than try another top-up now
+            logger.info("Withdrawal %s: top-up %s can't fund it (%s)", tx["id"], topup["id"], error)
+            continue
+        logger.info("Withdrawal %s sent at once, funded by top-up %s (charge %s)", tx["id"], topup["id"], charge["id"])
+        return transfer
+    return None
 
 
 def send_plaid_withdrawal(tx: dict, profile: dict) -> str:
@@ -1102,7 +1147,7 @@ def track(number: str, user: User = Depends(checked_user)):
             logger.exception("Tracking %s: checking with the provider failed", tx["id"])
         tx = ledger.find_tx(user.sub, tx["id"]) or tx
     # Shaped like a statement line (amounts as text), since the wallet shows it with the same code
-    return {"tx": {k: (str(v) if isinstance(v, Decimal) else v) for k, v in tx.items() if k not in ledger.INTERNAL}}
+    return {"tx": public_line(tx, is_admin(user))}
 
 
 def settle_withdrawals(sub: str, profile: dict):
@@ -1410,7 +1455,7 @@ def withdraw(body: Withdraw, user: User = Depends(checked_user)):
     outcome = send_withdrawal(tx, profile)
     if outcome == "failed":
         raise HTTPException(status_code=502, detail="The bank transfer was refused, so nothing left your balance.")
-    return {"withdrawn": money(amount, currency), "currency": currency, "status": outcome, **statement(user.sub)}
+    return {"withdrawn": money(amount, currency), "currency": currency, "status": outcome, **statement(user.sub, is_admin(user))}
 
 
 def withdraw_wise(body: Withdraw, user: User, profile: dict) -> dict:
@@ -1430,7 +1475,7 @@ def withdraw_wise(body: Withdraw, user: User, profile: dict) -> dict:
     outcome = send_wise_withdrawal(tx)
     if outcome == "failed":
         raise HTTPException(status_code=502, detail="Wise refused the transfer, so nothing left your balance.")
-    return {"withdrawn": money(amount, currency), "currency": currency, "status": outcome, **statement(user.sub)}
+    return {"withdrawn": money(amount, currency), "currency": currency, "status": outcome, **statement(user.sub, is_admin(user))}
 
 
 # ── Rewards: referrals and gift cards ────────────────────────────────────────
@@ -1506,7 +1551,7 @@ def checkout_topup(payment_id: str, request: Request, user: User = Depends(check
 def checkout_approve(payment_id: str, user: User = Depends(checked_user)):
     profile = ledger.ensure_profile(user)
     redirect = merchants.approve(merchants.get_payment(payment_id), user.sub, profile.get("name") or user.name, user.email)
-    return {"redirect": redirect, **statement(user.sub)}
+    return {"redirect": redirect, **statement(user.sub, is_admin(user))}
 
 
 @app.post("/api/pay/{payment_id}/cancel")
@@ -1532,7 +1577,7 @@ class PointsRedeem(BaseModel):
 @app.post("/api/points/redeem")
 def redeem_points(body: PointsRedeem, user: User = Depends(checked_user)):
     usd = rewards.redeem_points(user.sub, body.points)
-    return {"usd": money(usd, "USD"), **statement(user.sub)}
+    return {"usd": money(usd, "USD"), **statement(user.sub, is_admin(user))}
 
 
 class PointsToBitcoin(BaseModel):
@@ -1587,7 +1632,7 @@ def buy_gift_card(body: GiftCardOrder, user: User = Depends(checked_user)):
     except KeyError:
         raise ValueError(f"Gift cards can't be made in {currency} yet.")
     emailed = mail.gift_card(card, money_text(amount, currency))
-    return {"card": rewards.public_gift_card(card), "emailed": emailed, **statement(user.sub)}
+    return {"card": rewards.public_gift_card(card), "emailed": emailed, **statement(user.sub, is_admin(user))}
 
 
 class GiftCardCode(BaseModel):
@@ -1599,13 +1644,13 @@ def redeem_gift_card(body: GiftCardCode, user: User = Depends(checked_user)):
     ledger.ensure_profile(user)
     card = rewards.redeem_gift_card(user.sub, body.code)
     return {"amount": money(card["amount"], card["currency"]), "currency": card["currency"], "from": card.get("fromName", ""),
-            **statement(user.sub)}
+            **statement(user.sub, is_admin(user))}
 
 
 @app.post("/api/giftcards/cancel")
 def cancel_gift_card(body: GiftCardCode, user: User = Depends(checked_user)):
     card = rewards.cancel_gift_card(user.sub, body.code)
-    return {"amount": money(card["amount"], card["currency"]), "currency": card["currency"], **statement(user.sub)}
+    return {"amount": money(card["amount"], card["currency"]), "currency": card["currency"], **statement(user.sub, is_admin(user))}
 
 
 # ── Business accounts ─────────────────────────────────────────────────────────
@@ -1666,7 +1711,7 @@ def bulk_pay(body: BulkPay, user: User = Depends(checked_user)):
         ledger.bulk_transfer(user.sub, rewards.payer_name(profile), currency, payments)
     except ledger.InsufficientFunds:
         raise HTTPException(status_code=409, detail=f"You need {money(total, currency)} {currency} for this batch.")
-    return {"paid": len(payments), "total": money(total, currency), "currency": currency, **statement(user.sub)}
+    return {"paid": len(payments), "total": money(total, currency), "currency": currency, **statement(user.sub, is_admin(user))}
 
 
 # ── Admin: promo codes, businesses, rewards settings ─────────────────────────
