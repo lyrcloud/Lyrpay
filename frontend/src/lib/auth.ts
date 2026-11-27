@@ -17,6 +17,7 @@ type StoredSession = {
   idToken: string;
   refreshToken?: string;
   expiresAt: number;
+  clientId?: string; // which Lyr sign-in issued it, for refreshing
 };
 
 export type AuthenticatedUser = {
@@ -33,6 +34,10 @@ const PKCE_KEY = 'lyrpay:pkce-verifier';
 
 const region = import.meta.env.VITE_COGNITO_REGION || 'us-east-1';
 const clientId = import.meta.env.VITE_COGNITO_CLIENT_ID || '';
+// Lyrcloud accounts (Lyrcloud, Lyrsoft) sign in too, through Lyrpay's app client in the Lyrcloud pool. The API maps
+// both kinds of sign-in to one wallet per person (backend/app/identity.py).
+const lyrcloudClientId = import.meta.env.VITE_LYRCLOUD_CLIENT_ID || '400r1qrclm20r9ni9s69de6tr6';
+const lyrcloud = new CognitoIdentityProviderClient({ region });
 const hostedUiDomain = import.meta.env.VITE_COGNITO_DOMAIN || 'lyrtrip-auth.auth.us-east-1.amazoncognito.com';
 
 const cognito = new CognitoIdentityProviderClient({ region });
@@ -51,13 +56,14 @@ function readSession(): StoredSession | null {
   }
 }
 
-function saveSession(result: { AccessToken?: string; IdToken?: string; RefreshToken?: string; ExpiresIn?: number }, previous?: StoredSession) {
+function saveSession(result: { AccessToken?: string; IdToken?: string; RefreshToken?: string; ExpiresIn?: number }, previous?: StoredSession, client = previous?.clientId ?? clientId) {
   if (!result.AccessToken || !result.IdToken) throw new Error('Sign-in did not complete. Please try again.');
   localStorage.setItem(SESSION_KEY, JSON.stringify({
     accessToken: result.AccessToken,
     idToken: result.IdToken,
     refreshToken: result.RefreshToken ?? previous?.refreshToken,
     expiresAt: Date.now() + (result.ExpiresIn ?? 3600) * 1000,
+    clientId: client,
   }));
 }
 
@@ -95,9 +101,10 @@ export async function getIdToken(): Promise<string | null> {
   }
   refreshing ??= (async () => {
     try {
-      const response = await cognito.send(new InitiateAuthCommand({
+      const fromLyrcloud = session.clientId === lyrcloudClientId;
+      const response = await (fromLyrcloud ? lyrcloud : cognito).send(new InitiateAuthCommand({
         AuthFlow: 'REFRESH_TOKEN_AUTH',
-        ClientId: clientId,
+        ClientId: fromLyrcloud ? lyrcloudClientId : clientId,
         AuthParameters: { REFRESH_TOKEN: session.refreshToken! },
       }));
       saveSession(response.AuthenticationResult ?? {}, session);
@@ -120,13 +127,30 @@ export function signOut() {
   localStorage.removeItem(SESSION_KEY);
 }
 
+/** One login for the Lyr apps: a Lyr account first, then the same email and password as a Lyrcloud (or Lyrsoft)
+ * account, so either signs in here with nothing new to create. */
 export async function signIn(username: string, password: string) {
-  const response = await cognito.send(new InitiateAuthCommand({
-    AuthFlow: 'USER_PASSWORD_AUTH',
-    ClientId: clientId,
-    AuthParameters: { USERNAME: username, PASSWORD: password },
-  }));
-  saveSession(response.AuthenticationResult ?? {});
+  try {
+    const response = await cognito.send(new InitiateAuthCommand({
+      AuthFlow: 'USER_PASSWORD_AUTH',
+      ClientId: clientId,
+      AuthParameters: { USERNAME: username, PASSWORD: password },
+    }));
+    saveSession(response.AuthenticationResult ?? {}, undefined, clientId);
+  } catch (error) {
+    const name = (error as Error).name;
+    if (!lyrcloudClientId || !['NotAuthorizedException', 'UserNotFoundException'].includes(name) || !username.includes('@')) throw error;
+    try {
+      const response = await lyrcloud.send(new InitiateAuthCommand({
+        AuthFlow: 'USER_PASSWORD_AUTH',
+        ClientId: lyrcloudClientId,
+        AuthParameters: { USERNAME: username.trim().toLowerCase(), PASSWORD: password },
+      }));
+      saveSession(response.AuthenticationResult ?? {}, undefined, lyrcloudClientId);
+    } catch {
+      throw error; // neither knows these details: the Lyr account's own message
+    }
+  }
 }
 
 // The account pool's sign-up check speaks through Cognito as "PreSignUp failed with error <message>."

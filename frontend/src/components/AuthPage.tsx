@@ -323,7 +323,7 @@ export default function AuthPage({ onSignedIn, checkout }: { onSignedIn: () => v
                   <button type="button" className="link" disabled={busy} onClick={() => startReset()}>Forgot password?</button>
                 )}
               </form>
-              <p className="hint center">Already use Lyrtrip? Sign in with the same account.</p>
+              <p className="hint center">One login for every Lyr app: sign in with your Lyrtrip, Lyrcloud or Lyrsoft email and password, nothing new to create.</p>
             </>
           ) : (
             <form onSubmit={step === 'confirm' ? confirm : finishReset} className="form">

@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
-from app import admin_ops, btc_rewards, cards, dlocal_client, kyc, ledger, merchants, lyrbot, mail, paypal_client, plaid_client, rates, rewards, stocks, stripe_app, stripe_client, topup_methods, wise_client
+from app import admin_ops, btc_rewards, cards, identity, dlocal_client, kyc, ledger, merchants, lyrbot, mail, paypal_client, plaid_client, rates, rewards, stocks, stripe_app, stripe_client, topup_methods, wise_client
 from app.auth import User, current_user
 from app.money import exponent, from_minor, parse_amount, quantize
 
@@ -1882,6 +1882,12 @@ def admin_edit_line(sub: str, sk: str, body: AdminLine, admin: User = Depends(ad
 def admin_delete_line(sub: str, sk: str, body: AdminLine, admin: User = Depends(admin_user)):
     admin_ops.delete_transaction(admin.email, sub, sk, body.rebalance, body.reason)
     return admin_account(sub)
+
+
+@app.get("/api/admin/duplicates")
+def admin_duplicates(_: User = Depends(admin_user)):
+    """Wallets that look like the same person (same name and birthday, or name and phone): for review, never merged."""
+    return {"groups": identity.possible_duplicates()}
 
 
 @app.get("/api/admin/transactions")
