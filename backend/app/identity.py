@@ -40,7 +40,9 @@ def wallet_for(pool: str, sub: str, email: str, phone: str) -> str:
         _cache[(pool, sub)] = item["wallet"]
         return item["wallet"]
     wallet, linked_by = sub, "new"
-    for handle, how in ((email, "email"), (phone, "phone")):
+    # A sign-in that already has its own wallet keeps it: re-pointing it would hide that wallet's money
+    has_own = ledger.table().get_item(Key={"pk": f"USER#{sub}", "sk": "PROFILE"}).get("Item") is not None
+    for handle, how in (() if has_own else ((email, "email"), (phone, "phone"))):
         if not handle:
             continue
         owner = ledger.table().get_item(Key={"pk": f"HANDLE#{handle}", "sk": "HANDLE"}).get("Item")

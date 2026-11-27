@@ -69,3 +69,12 @@ def test_tokens_from_both_pools_are_checked_against_their_own_keys_and_client(mo
         with pytest.raises(HTTPException) as refused:
             auth.verify_token(bad)
         assert refused.value.status_code == 401
+
+
+def test_a_sign_in_with_its_own_wallet_keeps_it(as_user, monkeypatch):
+    """Two sign-ins with one email that both already have wallets (e.g. a Google sign-in never merged): neither is
+    re-pointed, so no balance is hidden; the admin sees them as possible duplicates instead."""
+    monkeypatch.setattr(identity, "_cache", {})
+    as_user(ALICE).get("/api/me")
+    ledger.table().put_item(Item={"pk": "USER#google-alice", "sk": "PROFILE", "name": "Alice", "email": ALICE.email})
+    assert identity.wallet_for("lyr", "google-alice", ALICE.email, "") == "google-alice"
