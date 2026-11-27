@@ -991,3 +991,23 @@ def test_other_stripe_errors_are_not_paid_in_usd(as_user, monkeypatch):
     alice.get("/api/me")
     response = alice.post("/api/topup", json={"amount": "10", "currency": "EUR"})
     assert response.status_code == 502 and "EUR" not in stripe_client.UNCHARGEABLE
+
+
+def test_waitlist_is_emailed_once_when_cards_go_live(as_user, monkeypatch):
+    from app import lambda_handler
+    monkeypatch.setattr(cards, "_status", (time.time(), False))
+    for person, country in ((ALICE, "US"), (CAROL, "GB")):
+        as_user(person).post("/api/cards/waitlist")
+        ledger.update_profile(person.sub, country=country)
+    as_user(BOB).get("/api/cards")  # opened the tab but didn't join
+    sent = []
+    monkeypatch.setattr(mail, "send", lambda to, subject, *rest, **kw: sent.append((to, subject)))
+    assert lambda_handler.handler({"warm": True}, None) == {"warm": True, "cardsLive": False}
+    assert sent == []
+
+    monkeypatch.setattr(cards, "_status", (time.time(), True))
+    monkeypatch.setattr(stripe_client, "platform", lambda: {"id": "acct", "country": "US", "currency": "USD"})
+    assert lambda_handler.handler({"warm": True}, None)["waitlist"] == {"sent": 2, "skipped": 0}
+    assert sorted(sent) == sorted([(ALICE.email, "Your Lyrpay Visa card is ready to get"), (CAROL.email, "Lyrpay cards have launched")])
+    assert lambda_handler.handler({"warm": True}, None)["waitlist"] == {"done": True}
+    assert len(sent) == 2

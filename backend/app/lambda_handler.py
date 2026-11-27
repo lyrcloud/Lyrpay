@@ -20,5 +20,11 @@ def handler(event, context):
         except Exception:
             logger.exception("Card availability check failed")
             cards_live = None
-        return {"warm": True, "cardsLive": cards_live}
+        result = {"warm": True, "cardsLive": cards_live}
+        if cards_live:
+            try:
+                result["waitlist"] = cards.notify_waitlist()
+            except Exception:
+                logger.exception("Telling the card waitlist failed; the next ping tries again")
+        return result
     return _asgi(event, context)

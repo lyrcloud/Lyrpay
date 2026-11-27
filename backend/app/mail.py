@@ -229,6 +229,33 @@ def business_decision(profile: dict, business: dict) -> bool:
         return False
 
 
+def card_launch(profile: dict, eligible: bool, country_name: str) -> bool:
+    """Tell someone on the card waitlist that Lyrpay cards are here (or not in their country yet)."""
+    to = mailable(profile.get("email"))
+    if not to or ledger.opted_out(to):
+        return False
+    if eligible:
+        heading, subject = "Your Lyrpay Visa card is ready", "Your Lyrpay Visa card is ready to get"
+        paragraphs = ["You asked us to tell you when Lyrpay cards were ready, and they are.",
+                      "Get your free virtual Visa card from the Card tab in a minute. It spends straight from your Lyrpay "
+                      "balance, it's approved only when your balance covers the payment, and you can freeze it any time."]
+        button = ("Get your card", f"{SITE_URL}/#cards")
+    else:
+        heading, subject = "Lyrpay cards have launched", "Lyrpay cards have launched"
+        paragraphs = [f"Lyrpay Visa cards are now available to people living in {country_name}.",
+                      "They aren't available in your country yet. You don't need to do anything: we'll let you know "
+                      "when they reach you."]
+        button = None
+    text, html = render(heading, [f"Hi {first_name(profile.get('name'))},"] + paragraphs, button=button,
+                        footer=_footer("You're getting this because you joined the Lyrpay card waitlist.", to))
+    try:
+        send(to, subject, text, html, unsubscribe_url(to))
+        return True
+    except Exception:
+        logger.exception("Card launch email to %s failed", to)
+        return False
+
+
 # ── Updates to everyone ───────────────────────────────────────────────────────
 
 def recipients() -> dict[str, str]:

@@ -21,7 +21,7 @@ import boto3
 from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 
-from app import ledger, stripe_client
+from app import ledger, mail, stripe_client
 from app.ledger import TABLE_NAME, _now, _put, _tx_item, table
 from app.money import from_minor
 
@@ -79,6 +79,37 @@ def issuing_live() -> bool:
     _status = (time.time(), live)
     return live
 
+
+# ── Telling the waitlist ─────────────────────────────────────────────────────
+
+COUNTRY_NAMES = {"US": "the United States", "GB": "the United Kingdom", "CA": "Canada", "AU": "Australia"}
+LAUNCH_KEY = ("SETTINGS", "CARDS_LAUNCH")
+
+
+def notify_waitlist() -> dict:
+    """Once cards are live, email everyone who joined the waitlist, once each, then remember it's done so later
+    checks cost one read. Called by the keep-warm ping; safe to run again (each person is marked before sending)."""
+    if ledger.get_item(*LAUNCH_KEY):
+        return {"done": True}
+    country = stripe_client.platform()["country"]
+    sent = skipped = 0
+    for profile in ledger.profiles():
+        if not profile.get("cardWaitlist") or profile.get("cardLaunchEmailed"):
+            continue
+        try:
+            table().update_item(Key={"pk": profile["pk"], "sk": "PROFILE"}, UpdateExpression="SET cardLaunchEmailed = :t",
+                                ConditionExpression="attribute_not_exists(cardLaunchEmailed)", ExpressionAttributeValues={":t": _now()})
+        except ClientError as error:
+            if error.response["Error"]["Code"] == "ConditionalCheckFailedException":
+                continue  # another run took this person
+            raise
+        if mail.card_launch(profile, profile.get("country") == country, COUNTRY_NAMES.get(country, country)):
+            sent += 1
+        else:
+            skipped += 1
+    table().put_item(Item={"pk": LAUNCH_KEY[0], "sk": LAUNCH_KEY[1], "at": _now(), "sent": sent, "skipped": skipped})
+    logger.info("Card launch: emailed %d people on the waitlist (%d skipped)", sent, skipped)
+    return {"sent": sent, "skipped": skipped}
 
 # ── Signing up ────────────────────────────────────────────────────────────────
 
