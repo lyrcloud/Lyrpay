@@ -39,7 +39,7 @@ const IN_APP = typeof navigator !== 'undefined' && /LyrpayApp/.test(navigator.us
 export function GetAppButton({ compact = false }: { compact?: boolean }) {
   if (IN_APP) return null;
   return (
-    <a className={`get-app${compact ? ' compact' : ''}`} href="/app" title="Get the Lyrpay Android app">
+    <a className={`app-dl-btn${compact ? ' compact' : ''}`} href="/app" title="Get the Lyrpay Android app">
       <span aria-hidden="true">📱</span><span className="get-app-label">Get the app</span>
     </a>
   );
