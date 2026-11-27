@@ -3,13 +3,14 @@ import AuthPage from './components/AuthPage';
 import Dashboard from './components/Dashboard';
 import PayPage from './components/PayPage';
 import { api, type CheckoutSummary } from './lib/api';
-import { completeHostedSignIn, currentUser } from './lib/auth';
+import { completeHostedSignIn, currentUser, signInWithGoogle, triggerMessage } from './lib/auth';
 import { captureReferral } from './lib/referral';
 
 captureReferral();
 
 // A Lyr app's payment link (lyrpay.com/pay/lpp_…) is kept through sign-in, including Google's round trip
 const PAY_KEY = 'lyrpay_pay';
+const LINK_RETRY = 'lyrpay_link_retry';
 const payFromPath = location.pathname.match(/^\/pay\/(lpp_[0-9a-f]{24})$/)?.[1];
 try {
   if (payFromPath) sessionStorage.setItem(PAY_KEY, payFromPath);
@@ -46,9 +47,18 @@ export default function App() {
     const code = params.get('code');
     const done = () => history.replaceState(null, '', '/');
     if (!code) {
-      setCallbackError(params.get('error_description') || 'Google sign-in was cancelled.');
+      const message = params.get('error_description') || '';
+      // The first Google sign-in after the pool links it to an existing account can be turned away once; it works on the retry
+      if (/already found an entry/i.test(message) && !sessionStorage.getItem(LINK_RETRY)) {
+        sessionStorage.setItem(LINK_RETRY, '1');
+        signInWithGoogle();
+        return;
+      }
+      sessionStorage.removeItem(LINK_RETRY);
+      setCallbackError(message ? triggerMessage(message) : 'Google sign-in was cancelled.');
       return done();
     }
+    sessionStorage.removeItem(LINK_RETRY);
     completeHostedSignIn(code)
       .then(() => setSignedIn(true))
       .catch(err => setCallbackError(err.message))

@@ -129,13 +129,21 @@ export async function signIn(username: string, password: string) {
   saveSession(response.AuthenticationResult ?? {});
 }
 
+// The account pool's sign-up check speaks through Cognito as "PreSignUp failed with error <message>."
+export const triggerMessage = (message: string) =>
+  message.replace(/^PreSignUp failed with error\s*/i, '').replace(/\.\.$/, '.');
+
 export async function signUp(email: string, password: string, name: string) {
-  await cognito.send(new SignUpCommand({
-    ClientId: clientId,
-    Username: email,
-    Password: password,
-    UserAttributes: [{ Name: 'email', Value: email }, ...(name ? [{ Name: 'name', Value: name }] : [])],
-  }));
+  try {
+    await cognito.send(new SignUpCommand({
+      ClientId: clientId,
+      Username: email,
+      Password: password,
+      UserAttributes: [{ Name: 'email', Value: email }, ...(name ? [{ Name: 'name', Value: name }] : [])],
+    }));
+  } catch (err) {
+    throw new Error(triggerMessage((err as Error).message));
+  }
 }
 
 export async function confirmSignUp(email: string, code: string) {
