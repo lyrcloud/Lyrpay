@@ -8,6 +8,7 @@
 #
 #   bash backend/scripts/connect_lyr_apps.sh            # from the Lyrpay repo
 #   ONLY="lyrcloud" bash backend/scripts/connect_lyr_apps.sh   # just some of them
+#   ONLY="lyrsoft" bash backend/scripts/connect_lyr_apps.sh    # Lyrsoft plans (not in the default list)
 set -euo pipefail
 
 LYRPAY_BACKEND="$(cd "$(dirname "$0")/.." && pwd)"
@@ -45,6 +46,9 @@ apps = [
     {"id": "lyrcloud", "name": "Lyrcloud",
      "webhookUrl": "https://uqp5mc2gq0.execute-api.us-east-1.amazonaws.com/public/lyrpay/callback",
      "returnOrigins": "https://www.lyrcloud.com https://lyrcloud.com"},
+    {"id": "lyrsoft", "name": "Lyrsoft",
+     "webhookUrl": "https://zub5am2gj4.execute-api.us-east-1.amazonaws.com/public/lyrpay/callback",
+     "returnOrigins": "https://lyrsoft.com https://www.lyrsoft.com"},
 ]
 for app in apps:
     if app["id"] not in os.environ["ONLY"].split():
@@ -61,6 +65,8 @@ deactivate
 echo "2/4 Saving keys in Secrets Manager"
 wants lyrshop && save_secret lyrshop/lyrpay "$KEYS/lyrshop.json"
 wants lyrcloud && save_secret lyrcloud/lyrpay "$KEYS/lyrcloud.json"
+# Lyrsoft plans (lyrsoft.com Plan & billing) read lyrsoft/lyrpay; nothing to redeploy, it is picked up within 5 minutes.
+wants lyrsoft && save_secret lyrsoft/lyrpay "$KEYS/lyrsoft.json"
 
 if wants lyrtrip; then
   echo "3/4 Lyrtrip: keys into .env.local, then the site deploy"
