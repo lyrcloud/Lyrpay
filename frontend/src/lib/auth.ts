@@ -178,13 +178,16 @@ export async function resendConfirmation(email: string) {
   await cognito.send(new ResendConfirmationCodeCommand({ ClientId: clientId, Username: email }));
 }
 
+// Email password resets go through the Lyrcloud pool: its bridge knows Lyr and Lyrshop accounts too (bringing one
+// over on a reset), so whichever Lyr app the email signed up on, one code arrives. Afterwards signIn() reaches the
+// same wallet through its Lyrcloud fallback. (The Lyr pool answers "code sent" even for emails it doesn't know.)
 export async function forgotPassword(email: string) {
-  await cognito.send(new ForgotPasswordCommand({ ClientId: clientId, Username: email }));
+  await lyrcloud.send(new ForgotPasswordCommand({ ClientId: lyrcloudClientId, Username: email.trim().toLowerCase() }));
 }
 
 export async function confirmForgotPassword(email: string, code: string, password: string) {
-  await cognito.send(new ConfirmForgotPasswordCommand({
-    ClientId: clientId, Username: email, ConfirmationCode: code, Password: password,
+  await lyrcloud.send(new ConfirmForgotPasswordCommand({
+    ClientId: lyrcloudClientId, Username: email.trim().toLowerCase(), ConfirmationCode: code, Password: password,
   }));
 }
 
