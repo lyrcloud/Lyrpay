@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
-from app import admin_ops, cards, dlocal_client, kyc, ledger, merchants, lyrbot, mail, paypal_client, plaid_client, rates, rewards, stocks, stripe_app, stripe_client, topup_methods, wise_client
+from app import admin_ops, btc_rewards, cards, dlocal_client, kyc, ledger, merchants, lyrbot, mail, paypal_client, plaid_client, rates, rewards, stocks, stripe_app, stripe_client, topup_methods, wise_client
 from app.auth import User, current_user
 from app.money import exponent, from_minor, parse_amount, quantize
 
@@ -1419,6 +1419,8 @@ def my_rewards(user: User = Depends(checked_user)):
         "points": rewards.points_summary(profile, {tx["kind"] for tx in ledger.transactions(user.sub, 500)}),
         "giftCards": rewards.gift_cards_bought(user.sub),
         "limits": {"giftMinUsd": str(rewards.GIFT_MIN_USD), "giftMaxUsd": str(rewards.GIFT_MAX_USD)},
+        "bitcoin": {"available": btc_rewards.available(is_admin(user)), "minPoints": btc_rewards.MIN_POINTS,
+                    "email": profile.get("coinbaseEmail") or user.email or "", "history": btc_rewards.history(user.sub)},
     }
 
 
@@ -1506,6 +1508,24 @@ class PointsRedeem(BaseModel):
 def redeem_points(body: PointsRedeem, user: User = Depends(checked_user)):
     usd = rewards.redeem_points(user.sub, body.points)
     return {"usd": money(usd, "USD"), **statement(user.sub)}
+
+
+class PointsToBitcoin(BaseModel):
+    points: int
+    email: str
+
+
+@app.post("/api/points/bitcoin")
+def redeem_points_as_bitcoin(body: PointsToBitcoin, user: User = Depends(checked_user)):
+    """Send the points' worth in BTC to the person's Coinbase account (btc_rewards.py)."""
+    if not btc_rewards.available(is_admin(user)):
+        raise HTTPException(status_code=409, detail="Bitcoin rewards are coming soon.")
+    ledger.ensure_profile(user)
+    reward = btc_rewards.redeem(user.sub, body.points, body.email)
+    ledger.update_profile(user.sub, coinbaseEmail=reward["to"])
+    if reward["status"] == "failed":
+        raise HTTPException(status_code=502, detail=f"Coinbase couldn't send it, so your points are back. {reward['reason']}")
+    return {"reward": reward}
 
 
 class ReferralClaim(BaseModel):

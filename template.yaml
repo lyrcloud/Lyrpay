@@ -168,6 +168,7 @@ Resources:
                 - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:lyrpay/paypal-*'
                 - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:lyrpay/wise-*'
                 - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:lyrpay/dlocal-*'
+                - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:lyrpay/coinbase-*'
                 # The Twilio account the Lyr apps share: phone verification (KYC)
                 - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:lyrshop/twilio-*'
                 - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${AnthropicSecretName}-*'
@@ -205,6 +206,7 @@ Resources:
                 - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:lyrpay/paypal-*'
                 - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:lyrpay/wise-*'
                 - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:lyrpay/dlocal-*'
+                - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:lyrpay/coinbase-*'
       Events:
         Every15Minutes:
           Type: Schedule

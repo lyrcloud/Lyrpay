@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { api, type GiftCard, type Points as PointsData, type Rewards as RewardsData, type Statement } from '../lib/api';
+import { api, type BitcoinReward, type GiftCard, type Points as PointsData, type Rewards as RewardsData, type Statement } from '../lib/api';
 import { formatDate, formatMoney } from '../lib/format';
 import { LogoMark } from './Logo';
 import { CurrencySelect } from './MoneyActions';
@@ -90,6 +90,64 @@ function Referral({ data }: { data: RewardsData['referral'] }) {
         <div><strong>{formatMoney(data.earnedUsd, 'USD')}</strong><span>earned</span></div>
         <div><button className="link" onClick={() => copy(data.code)}>{copied === data.code ? 'Copied ✓' : data.code}</button><span>your code</span></div>
       </div>
+    </section>
+  );
+}
+
+const BTC_STATUS: Record<BitcoinReward['status'], string> = { sending: 'Sending', pending: 'On its way', sent: 'Sent', failed: 'Failed, points returned' };
+
+/** Points sent as Bitcoin to the person's Coinbase account, from Lyrpay's own Coinbase float (btc_rewards.py). */
+function Bitcoin({ points, info, onNotice, onChange }: {
+  points: number; info: NonNullable<RewardsData['bitcoin']>; onNotice: (text: string) => void; onChange: () => void;
+}) {
+  const [amount, setAmount] = useState(String(Math.max(points - (points % 100), 0)));
+  const [email, setEmail] = useState(info.email);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const chosen = Math.floor(Number(amount) || 0);
+  const send = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setBusy(true);
+    setError('');
+    try {
+      const { reward } = await api.pointsToBitcoin(chosen, email.trim());
+      onNotice(`${reward.points.toLocaleString()} points became ${reward.btc} BTC, ${reward.status === 'sent' ? 'sent' : 'on its way'} to your Coinbase account ${reward.to}.`);
+      onChange();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <section className="card">
+      <h2>Get your points as <span className="gradient-text">Bitcoin</span></h2>
+      <p className="muted">
+        We send their worth in Bitcoin at today's price to your Coinbase account, with no fees: 100 points = $1 of BTC,
+        from {info.minPoints.toLocaleString()} points. You need a Coinbase account with this email.
+      </p>
+      <form className="form" onSubmit={send}>
+        <label>Points <input type="number" min={info.minPoints} max={points} step={1} value={amount} onChange={e => setAmount(e.target.value)} /></label>
+        <label>Coinbase email <input type="email" required value={email} onChange={e => setEmail(e.target.value)} /></label>
+        {points < info.minPoints && <p className="hint">You need {(info.minPoints - points).toLocaleString()} more points.</p>}
+        {error && <p className="error" role="alert">{error}</p>}
+        <button className="button primary" disabled={busy || chosen < info.minPoints || chosen > points}>
+          {busy ? 'Sending…' : `Send ${formatMoney(String(chosen / 100), 'USD')} in BTC`}
+        </button>
+      </form>
+      {info.history.length > 0 && (
+        <ul className="bought">
+          {info.history.map(r => (
+            <li key={r.id}>
+              <div>
+                <strong>{r.btc} BTC</strong>
+                <span>{formatMoney(r.usd, 'USD')} · {r.points.toLocaleString()} points · {formatDate(r.at)}</span>
+              </div>
+              <span className={`badge ${r.status === 'sent' ? 'live' : 'soon'}`} title={r.reason}>{BTC_STATUS[r.status]}</span>
+            </li>
+          ))}
+        </ul>
+      )}
     </section>
   );
 }
@@ -308,6 +366,7 @@ export default function Rewards(props: Props) {
     <div className="rewards">
       <Referral data={data.referral} />
       <Points data={data.points} onStatement={props.onStatement} onNotice={props.onNotice} onChange={load} />
+      {data.bitcoin?.available && <Bitcoin points={data.points.balance} info={data.bitcoin} onNotice={props.onNotice} onChange={load} />}
       <div className="grid">
         <section className="card">
           <h2>Send a gift card</h2>

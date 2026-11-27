@@ -52,6 +52,12 @@ export type Rewards = {
   points: Points;
   giftCards: GiftCard[];
   limits: { giftMinUsd: string; giftMaxUsd: string };
+  bitcoin: { available: boolean; minPoints: number; email: string; history: BitcoinReward[] };
+};
+
+export type BitcoinReward = {
+  id: string; at: string; points: number; usd: string; btc: string; to: string;
+  status: 'sending' | 'pending' | 'sent' | 'failed'; reason: string;
 };
 
 export type CheckoutSummary = {
@@ -217,6 +223,7 @@ export const api = {
   approveCheckout: (id: string) => post<{ redirect: string }>(`/pay/${id}/approve`, {}),
   cancelCheckout: (id: string) => post<{ redirect: string }>(`/pay/${id}/cancel`, {}),
   redeemPoints: (points: number) => post<{ usd: string } & Statement>('/points/redeem', { points }),
+  pointsToBitcoin: (points: number, email: string) => post<{ reward: BitcoinReward }>('/points/bitcoin', { points, email }),
   redeemGiftCard: (code: string) => post<{ amount: string; currency: string; from: string } & Statement>('/giftcards/redeem', { code }),
   cancelGiftCard: (code: string) => post<{ amount: string; currency: string } & Statement>('/giftcards/cancel', { code }),
   business: () => request<{ business: Business | null; feeBps: number; standardFeeBps: number; businessFeeBps: number; bulkMax: number }>('/business'),
