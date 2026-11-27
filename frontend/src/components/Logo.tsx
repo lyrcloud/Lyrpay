@@ -33,11 +33,33 @@ export default function Logo({ size = 32, large = false }: { size?: number; larg
   );
 }
 
+const IN_APP = typeof navigator !== 'undefined' && /LyrpayApp/.test(navigator.userAgent);
+
+/** The Android app's download, near the top of every page (hidden inside the app itself). */
+export function GetAppButton({ compact = false }: { compact?: boolean }) {
+  if (IN_APP) return null;
+  return (
+    <a className={`get-app${compact ? ' compact' : ''}`} href="/app" title="Get the Lyrpay Android app">
+      <span aria-hidden="true">📱</span><span className="get-app-label">Get the app</span>
+    </a>
+  );
+}
+
+/** A slim banner above the home page with the app download. */
+export function AppBanner() {
+  if (IN_APP) return null;
+  return (
+    <a className="app-banner" href="/app">
+      <span aria-hidden="true">📱</span> <b>Lyrpay for Android</b> <span className="muted-on-color">Your wallet in your pocket, free.</span>
+      <span className="app-banner-cta">Get the app →</span>
+    </a>
+  );
+}
+
 export function SiteFooter() {
   return (
     <footer className="site-footer">
       <span className="site-footer-brand"><LogoMark size={16} />© {new Date().getFullYear()} Lyrpay</span>
-      {!/LyrpayApp/.test(navigator.userAgent) && <a href="/app">Get the Android app</a>}
       <a href="/terms.html">Terms</a>
       <a href="/privacy.html">Privacy</a>
       <span>Powered by Lyrcloud</span>

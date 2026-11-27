@@ -1884,6 +1884,13 @@ def admin_delete_line(sub: str, sk: str, body: AdminLine, admin: User = Depends(
     return admin_account(sub)
 
 
+@app.get("/api/admin/transactions")
+def admin_transactions(q: str = "", kind: str = "", status: str = "", app: str = "", days: int = 30,
+                       _: User = Depends(admin_user)):
+    """Every transaction across Lyrpay and the Lyr apps, filtered; each row opens its account to edit or delete it."""
+    return admin_ops.all_transactions(q=q, kind=kind, status=status, app=app, days=days)
+
+
 @app.get("/api/admin/audit")
 def admin_audit(_: User = Depends(admin_user)):
     return {"entries": admin_ops.audit_log()}

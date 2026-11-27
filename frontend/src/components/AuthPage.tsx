@@ -15,7 +15,7 @@ import {
 import { COUNTRIES, currencyOf, flag, formatMoney, guessCountry, toE164 } from '../lib/format';
 import { pendingReferral } from '../lib/referral';
 import LiveMarkets, { Ticker } from './LiveMarkets';
-import Logo, { SiteFooter } from './Logo';
+import Logo, { AppBanner, SiteFooter } from './Logo';
 import { AiPulse, MarketClocks } from './StockMarkets';
 import { type CheckoutSummary } from '../lib/api';
 
@@ -217,6 +217,7 @@ export default function AuthPage({ onSignedIn, checkout }: { onSignedIn: () => v
 
   return (
     <div className="home">
+      <AppBanner />
       <Ticker />
       <div className="auth hero" onPointerMove={spotlight}>
         {checkout ? (

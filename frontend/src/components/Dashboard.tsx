@@ -8,7 +8,7 @@ import Cards from './Cards';
 import Rewards from './Rewards';
 import { forgetReferral, pendingReferral } from '../lib/referral';
 import LiveMarkets, { Ticker } from './LiveMarkets';
-import Logo, { SiteFooter } from './Logo';
+import Logo, { GetAppButton, SiteFooter } from './Logo';
 import { AddMoney, Convert, CurrencySelect, SendMoney, Withdraw } from './MoneyActions';
 import { Activity, Connections, TrackPayment } from './Panels';
 import Verify from './Verify';
@@ -134,6 +134,7 @@ export default function Dashboard({ onSignedOut }: { onSignedOut: () => void }) 
             </button>
           ))}
         </nav>
+        <GetAppButton compact />
         <div className="account">
           {user?.picture ? <img src={user.picture} alt="" className="avatar" /> : <span className="avatar">{(profile?.name || user?.name || '?')[0]?.toUpperCase()}</span>}
           <span className="account-name">{profile?.name || user?.email || user?.phone}</span>

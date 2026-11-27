@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, type Transaction } from '../lib/api';
 import { formatMoney, trackingNumber } from '../lib/format';
-import Logo, { SiteFooter } from './Logo';
+import Logo, { GetAppButton, SiteFooter } from './Logo';
 
 const REFRESH_MS = 10000;
 const RAIL: Record<string, string> = { wise: 'Wise', plaid: 'Plaid', stripe: 'Stripe' };
@@ -85,6 +85,7 @@ export default function TrackPage({ number, onDone }: { number: string; onDone: 
       <header className="topbar">
         <Logo />
         <span className="spacer" />
+        <GetAppButton compact />
         <button className="button" onClick={onDone}>← Back to wallet</button>
       </header>
       <main className="track-main">

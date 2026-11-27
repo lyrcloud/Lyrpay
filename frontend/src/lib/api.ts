@@ -90,6 +90,18 @@ export type Points = {
   affiliatePoints: number; minRedeem: number; pointsPerFeeUsd: string; affiliatePercent: string;
 };
 
+export type AdminLine = {
+  sub: string; sk: string; id: string; tracking: string; at: string; kind: Transaction['kind']; currency: string; amount: string;
+  usd: string; status: 'done' | 'pending' | 'failed'; counterparty: string; note: string; rail: string; reference: string;
+  name: string; email: string; app: string; isApp: boolean;
+};
+
+export type AdminLines = {
+  transactions: AdminLine[];
+  totals: { count: number; inUsd: string; outUsd: string; pending: number; failed: number };
+  apps: { id: string; name: string }[];
+};
+
 export type CouponAudience = 'everyone' | 'business' | 'personal';
 
 export type Coupon = {
@@ -265,6 +277,7 @@ export const api = {
     post<{ sentTo: string } & Statement>('/transfer', { to, amount, currency, note }),
   payouts: () => request<Payouts>('/payouts'),
   onboardPayouts: () => post<{ url: string }>('/payouts/onboard', {}),
+  adminTransactions: (filters: Record<string, string>) => request<AdminLines>(`/admin/transactions?${new URLSearchParams(filters)}`),
   adminAccount: (sub: string) => request<{ account: AdminAccount }>(`/admin/users/${encodeURIComponent(sub)}`),
   adminEditAccount: (sub: string, fields: Record<string, unknown>, reason = '') =>
     request<{ account: AdminAccount }>(`/admin/users/${encodeURIComponent(sub)}`, { method: 'PATCH', body: JSON.stringify({ fields, reason }) }),

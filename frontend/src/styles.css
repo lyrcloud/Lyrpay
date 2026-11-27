@@ -939,3 +939,101 @@ input, select, textarea { transition: border-color 0.2s ease, box-shadow 0.2s ea
   .track-steps::before, .track-steps::after { top: 16px; }
   .track-label { font-size: 0.72rem; }
 }
+
+/* ── Light and glossy (2026-11-27) ──────────────────────────────────────────
+   The deep navy is gone: the dark theme is now a soft, lighter indigo with glass surfaces, and every card and the
+   Lyrpay card catch a glossy highlight. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #2a3163;
+    --surface: #353d78;
+    --surface-2: #404a8a;
+    --text: #f6f7ff;
+    --muted: #c9cdf0;
+    --border: #545ea3;
+    --accent: #a3a3ff;
+    --accent-text: #14163a;
+    --info-bg: #46509a;
+    --error-bg: #6a3450;
+    --shadow: 0 1px 2px rgb(10 12 40 / 0.2), 0 10px 26px rgb(10 12 40 / 0.22);
+    --shadow-lift: 0 16px 40px rgb(10 12 40 / 0.32);
+    --wash-1: rgb(167 139 250 / 0.30);
+    --wash-2: rgb(56 214 240 / 0.22);
+    --wash-3: rgb(255 145 120 / 0.14);
+  }
+  .button.primary { color: #fff; }
+  .nav button[aria-current='true'], .tabs button[aria-selected='true'] { color: #fff; }
+}
+
+/* Gloss: a soft white sheen across the top of every surface */
+.card, .kpi, .coin, .fx, .providers li, .lyrbot-panel {
+  background-image: linear-gradient(180deg, rgb(255 255 255 / 0.55), rgb(255 255 255 / 0) 42%);
+  box-shadow: var(--shadow), inset 0 1px 0 rgb(255 255 255 / 0.7);
+}
+@media (prefers-color-scheme: dark) {
+  .card, .kpi, .coin, .fx, .providers li, .lyrbot-panel {
+    background-image: linear-gradient(180deg, rgb(255 255 255 / 0.10), rgb(255 255 255 / 0) 45%);
+    box-shadow: var(--shadow), inset 0 1px 0 rgb(255 255 255 / 0.16);
+  }
+}
+.hero-wallet { background-image: linear-gradient(180deg, rgb(255 255 255 / 0.22), rgb(255 255 255 / 0) 45%), var(--brand-gradient); }
+.button.primary, .nav button[aria-current='true'], .tabs button[aria-selected='true'] {
+  background-image: linear-gradient(180deg, rgb(255 255 255 / 0.28), rgb(255 255 255 / 0) 55%), var(--brand-gradient);
+}
+
+/* The Lyrpay card and the midnight gift card: from deep navy to bright glossy colour */
+.paycard {
+  background:
+    linear-gradient(160deg, rgb(255 255 255 / 0.35), rgb(255 255 255 / 0) 38%),
+    radial-gradient(120% 140% at 0% 0%, #8b7bff 0%, #5b6cf6 45%, #22b8e6 100%);
+  box-shadow: 0 22px 50px rgb(91 91 246 / 0.35), inset 0 1px 0 rgb(255 255 255 / 0.5), inset 0 0 0 1px rgb(255 255 255 / 0.2);
+}
+.paycard::after { opacity: 0.25; }
+.giftcard.midnight { background: linear-gradient(160deg, rgb(255 255 255 / 0.3), transparent 40%), linear-gradient(135deg, #6d6cff, #8b5cf6 55%, #c084fc); }
+.swatch.midnight { background: linear-gradient(135deg, #6d6cff, #c084fc); }
+.giftcard { background-blend-mode: normal; }
+.giftcard.aurora, .giftcard.sunset, .giftcard.ocean { background-image: linear-gradient(160deg, rgb(255 255 255 / 0.28), transparent 40%), var(--gc); }
+.giftcard.aurora { --gc: linear-gradient(135deg, #7c5cff, #5b5bf6 50%, #18c8e8); }
+.giftcard.sunset { --gc: linear-gradient(135deg, #ff7a59, #e0467a 55%, #8a3ffc); }
+.giftcard.ocean { --gc: linear-gradient(135deg, #0ea5a4, #1286d6 55%, #3b3bd6); }
+
+/* App download at the top */
+.get-app { display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 999px; text-decoration: none; font-weight: 700; font-size: 0.88rem; white-space: nowrap;
+  color: #fff; background-image: linear-gradient(180deg, rgb(255 255 255 / 0.3), rgb(255 255 255 / 0) 55%), linear-gradient(135deg, #22c38e, #18a8d8);
+  box-shadow: 0 6px 18px rgb(24 168 216 / 0.3), inset 0 1px 0 rgb(255 255 255 / 0.5); transition: transform 0.15s ease, box-shadow 0.2s ease; }
+.get-app:hover { transform: translateY(-1px); box-shadow: 0 10px 24px rgb(24 168 216 / 0.4), inset 0 1px 0 rgb(255 255 255 / 0.5); }
+.get-app:active { transform: scale(0.97); }
+.app-banner { display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap; padding: 9px 16px; text-decoration: none; color: #fff; font-size: 0.9rem;
+  background-image: linear-gradient(180deg, rgb(255 255 255 / 0.25), rgb(255 255 255 / 0) 60%), linear-gradient(90deg, #22c38e, #18a8d8 45%, #7c5cff); }
+.app-banner:hover .app-banner-cta { transform: translateX(3px); }
+.muted-on-color { opacity: 0.9; }
+.app-banner-cta { margin-left: 6px; padding: 4px 12px; border-radius: 999px; background: rgb(255 255 255 / 0.22); font-weight: 700; transition: transform 0.15s ease; }
+
+/* Admin transactions */
+.kind-chips { flex-wrap: wrap; margin: 0 0 12px; }
+.all-lines tr.clickable { cursor: pointer; }
+.all-lines tr.status-pending td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
+.all-lines tr.status-failed td:first-child { box-shadow: inset 3px 0 0 var(--negative); }
+.all-lines td { vertical-align: middle; }
+.nowrap { white-space: nowrap; }
+.tx-icon.small { display: inline-grid; width: 26px; height: 26px; border-radius: 8px; font-size: 0.85rem; vertical-align: middle; }
+.app-badge { background: color-mix(in srgb, var(--c2) 16%, transparent); color: var(--c2) !important; }
+.app-badge.app-lyrpay { background: color-mix(in srgb, var(--c1) 16%, transparent); color: var(--c1) !important; }
+.panel-tools select { width: auto; }
+
+@media (max-width: 820px) {
+  .get-app.compact .get-app-label { display: none; }
+  .get-app.compact { padding: 8px 10px; }
+}
+
+.all-lines .person strong { display: inline-flex; align-items: center; gap: 6px; }
+.all-lines .person .tag { margin-left: 0; vertical-align: 0; }
+/* Room for the app button in the top bar: the label folds away first, then the section names' icons stay */
+@media (max-width: 1360px) {
+  .get-app.compact .get-app-label { display: none; }
+  .get-app.compact { padding: 8px 10px; }
+  .account-name { display: none; }
+}
+@media (max-width: 1180px) and (min-width: 821px) {
+  .nav button { padding: 8px 9px; }
+}

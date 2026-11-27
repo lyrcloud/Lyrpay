@@ -5,7 +5,7 @@ together or not at all. The audit log keeps who changed what, with the item befo
   AUDIT#<yyyy-mm>   <iso>#<id>   admin, action, target, before, after, reason
 """
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 
 from boto3.dynamodb.conditions import Key
@@ -254,3 +254,64 @@ def delete_account(admin: str, sub: str, reason: str = "") -> int:
         for key in keys:
             batch.delete_item(Key=key)
     return len(keys)
+
+
+# ── Every transaction, for the super admin's Transactions panel ──────────────
+
+def _usd(amount: Decimal, currency: str) -> Decimal:
+    from app import rates
+    try:
+        return (amount / rates.rate("USD", currency)).quantize(Decimal("0.01"))
+    except (KeyError, ArithmeticError):
+        return Decimal(0)
+
+
+def all_transactions(q: str = "", kind: str = "", status: str = "", app: str = "", days: int = 30, limit: int = 500) -> dict:
+    """Every statement line across all accounts (people and the Lyr apps' own accounts), newest first, with who it
+    belongs to and which app it came through, plus totals for what's shown. Filters: free text (name, email, tracking
+    number, counterparty, note, id), kind, status ('pending', 'failed', 'done'), app ('lyrpay' or a Lyr app's id)."""
+    from boto3.dynamodb.conditions import Attr
+    since = (datetime.now(timezone.utc) - timedelta(days=max(1, min(days, 3650)))).isoformat(timespec="milliseconds")
+    lines = ledger._scan(FilterExpression=Attr("sk").begins_with("TX#") & Attr("at").gte(since))
+    people = {p["pk"]: p for p in ledger.profiles()}
+    app_names = {str(m["id"]): m.get("name", "") for m in ledger._scan(FilterExpression=Attr("sk").eq("MERCHANT"))}
+    q = q.strip().lower()
+    q_id = ledger.tx_id_from_tracking(q) if q else None
+    out, totals = [], {"count": 0, "inUsd": Decimal(0), "outUsd": Decimal(0), "pending": 0, "failed": 0}
+    for tx in sorted(lines, key=lambda t: t["at"], reverse=True):
+        owner = tx["pk"].removeprefix("USER#")
+        profile = people.get(tx["pk"], {})
+        merchant_id = owner.removeprefix("merchant_") if owner.startswith("merchant_") else ""
+        via = merchant_id or str(tx.get("merchant") or "")
+        if not via and tx.get("kind") == "payment":
+            via = next((mid for mid, name in app_names.items() if name and name == tx.get("counterparty")), "")
+        line_status = tx.get("status") or "done"
+        if line_status == "paid":
+            line_status = "done"
+        if kind and tx.get("kind") != kind:
+            continue
+        if status and line_status != status:
+            continue
+        if app and (via or "lyrpay") != app:
+            continue
+        if q:
+            haystack = " ".join(str(x) for x in (profile.get("name"), profile.get("email"), profile.get("phone"), tx.get("counterparty"),
+                                                   tx.get("note"), tx.get("id"), tx.get("reference"), owner)).lower()
+            if q not in haystack and not (q_id and tx.get("id") == q_id):
+                continue
+        usd = _usd(Decimal(tx["amount"]), tx["currency"])
+        totals["count"] += 1
+        totals["inUsd" if usd > 0 else "outUsd"] += abs(usd) if line_status != "failed" else 0
+        totals["pending"] += line_status == "pending"
+        totals["failed"] += line_status == "failed"
+        if len(out) < limit:
+            out.append({
+                "sub": owner, "sk": tx["sk"], "id": tx["id"], "tracking": ledger.tracking_number(tx["id"]), "at": tx["at"],
+                "kind": tx.get("kind", ""), "currency": tx["currency"], "amount": str(tx["amount"]), "usd": str(usd),
+                "status": line_status, "counterparty": tx.get("counterparty", ""), "note": tx.get("note", ""),
+                "rail": tx.get("rail", ""), "reference": tx.get("reference", ""),
+                "name": app_names.get(merchant_id, "") if merchant_id else profile.get("name", ""),
+                "email": profile.get("email", ""), "app": via or "lyrpay", "isApp": bool(merchant_id),
+            })
+    totals = {k: (str(v) if isinstance(v, Decimal) else v) for k, v in totals.items()}
+    return {"transactions": out, "totals": totals, "apps": [{"id": k, "name": v} for k, v in sorted(app_names.items())]}

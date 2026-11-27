@@ -70,3 +70,28 @@ def test_admin_deletes_an_account(as_user, monkeypatch):
     assert admin.post("/api/admin/users/alice/delete", json={"confirm": "DELETE", "reason": "asked"}).json()["deleted"] >= 3
     assert ledger.find_recipient(ALICE.email) is None
     assert admin.get("/api/admin/users/alice").status_code == 404
+
+
+def test_admin_sees_every_transaction_across_accounts_and_apps(as_user, monkeypatch):
+    from app import ledger
+    from tests.test_api import ALICE, CAROL, paid_session, stripe_client
+    monkeypatch.setattr(stripe_client, "get_checkout", lambda _: paid_session("alice"))
+    as_user(ALICE).get("/api/me")  # registers Alice's email for payments
+    as_user(ALICE).post("/api/topup/confirm", json={"sessionId": "cs_adm_all_1"})
+    monkeypatch.setattr(stripe_client, "get_checkout", lambda _: paid_session("carol"))
+    as_user(CAROL).post("/api/topup/confirm", json={"sessionId": "cs_adm_all_2"})
+    as_user(CAROL).post("/api/transfer", json={"to": ALICE.email, "amount": "5", "currency": "USD", "note": "lunch"})
+
+    admin = as_user(ADMIN)
+    everything = admin.get("/api/admin/transactions").json()
+    kinds = sorted(t["kind"] for t in everything["transactions"])
+    assert kinds == ["receive", "send", "topup", "topup"]
+    assert everything["totals"]["count"] == 4 and all(t["app"] == "lyrpay" for t in everything["transactions"])
+    first = everything["transactions"][0]
+    assert first["tracking"] == ledger.tracking_number(first["id"]) and first["sk"].startswith("TX#")
+
+    lunch = admin.get("/api/admin/transactions", params={"q": "lunch"}).json()["transactions"]
+    assert sorted(t["kind"] for t in lunch) == ["receive", "send"]
+    assert [t["sub"] for t in admin.get("/api/admin/transactions", params={"q": first["tracking"].lower()}).json()["transactions"]] == [first["sub"]]
+    assert {t["kind"] for t in admin.get("/api/admin/transactions", params={"kind": "topup"}).json()["transactions"]} == {"topup"}
+    assert as_user(ALICE).get("/api/admin/transactions").status_code == 403
