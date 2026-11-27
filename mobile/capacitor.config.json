@@ -1,0 +1,37 @@
+{
+  "appId": "com.lyrpay.app",
+  "appName": "Lyrpay",
+  "webDir": "www",
+  "server": {
+    "url": "https://lyrpay.com",
+    "errorPath": "offline.html",
+    "allowNavigation": [
+      "lyrpay.com",
+      "www.lyrpay.com",
+      "lyrtrip-auth.auth.us-east-1.amazoncognito.com",
+      "checkout.stripe.com",
+      "*.stripe.com",
+      "*.paypal.com",
+      "*.plaid.com",
+      "connect.stripe.com",
+      "verify.stripe.com"
+    ]
+  },
+  "appendUserAgent": "LyrpayApp",
+  "backgroundColor": "#f5f6fb",
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 1200,
+      "backgroundColor": "#f5f6fb",
+      "showSpinner": false
+    },
+    "StatusBar": {
+      "style": "LIGHT",
+      "backgroundColor": "#f5f6fb",
+      "overlaysWebView": false
+    }
+  },
+  "android": {
+    "allowMixedContent": false
+  }
+}

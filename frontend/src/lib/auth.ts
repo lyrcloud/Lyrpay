@@ -190,9 +190,24 @@ function base64Url(bytes: Uint8Array) {
   return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
-const redirectUri = () => `${location.origin}/auth/callback`;
+// Inside the Android app Google refuses sign-in within the WebView (403 disallowed_useragent), so the Hosted UI opens
+// in a Chrome Custom Tab and returns to the app's own scheme; MainActivity loads /auth/callback in the WebView, where
+// the PKCE verifier is waiting. The token exchange must name the same redirect, so it's remembered with the verifier.
+const APP_REDIRECT = 'com.lyrpay.app://auth/callback';
+const APP_REDIRECT_KEY = 'lyrpay_app_redirect';
+type CapacitorBrowser = { open(options: { url: string }): Promise<void> };
+const nativeBrowser = (): CapacitorBrowser | null => {
+  const cap = (window as unknown as { Capacitor?: { isNativePlatform?: () => boolean; Plugins?: { Browser?: CapacitorBrowser } } }).Capacitor;
+  return cap?.isNativePlatform?.() ? cap.Plugins?.Browser ?? null : null;
+};
+export const inApp = () => /LyrpayApp/.test(navigator.userAgent);
+
+const redirectUri = () => (sessionStorage.getItem(APP_REDIRECT_KEY) ? APP_REDIRECT : `${location.origin}/auth/callback`);
 
 export async function signInWithGoogle() {
+  const browser = nativeBrowser();
+  if (browser) sessionStorage.setItem(APP_REDIRECT_KEY, '1');
+  else sessionStorage.removeItem(APP_REDIRECT_KEY);
   const verifier = base64Url(crypto.getRandomValues(new Uint8Array(48)));
   const challenge = base64Url(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier))));
   sessionStorage.setItem(PKCE_KEY, verifier);
@@ -205,7 +220,9 @@ export async function signInWithGoogle() {
     code_challenge: challenge,
     code_challenge_method: 'S256',
   });
-  location.href = `https://${hostedUiDomain}/oauth2/authorize?${params}`;
+  const url = `https://${hostedUiDomain}/oauth2/authorize?${params}`;
+  if (browser) await browser.open({ url });
+  else location.href = url;
 }
 
 export async function completeHostedSignIn(code: string) {
@@ -219,6 +236,7 @@ export async function completeHostedSignIn(code: string) {
     }),
   });
   const body = await response.json();
+  sessionStorage.removeItem(APP_REDIRECT_KEY);
   if (!response.ok) throw new Error(body.error_description || body.error || 'Google sign-in failed.');
   saveSession({ AccessToken: body.access_token, IdToken: body.id_token, RefreshToken: body.refresh_token, ExpiresIn: body.expires_in });
 }

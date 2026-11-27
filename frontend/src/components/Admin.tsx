@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, type AdminOverview, type Transaction } from '../lib/api';
 import { countryName, flag, formatDate, formatMoney } from '../lib/format';
+import AdminAccount, { AuditLog } from './AdminAccount';
 import AdminApps from './AdminApps';
 import { Businesses, Coupons, Settings } from './AdminRewards';
 
@@ -18,6 +19,7 @@ const KIND: Record<Transaction['kind'], { label: string; color: string }> = {
   bonus: { label: 'Bonuses', color: 'var(--c4)' },
   card: { label: 'Card payments', color: 'var(--c2)' },
   payment: { label: 'Lyr app payments', color: 'var(--c5)' },
+  adjust: { label: 'Admin adjustments', color: 'var(--muted)' },
 };
 
 // The second half of money already counted (a transfer's receive, a gift card's redeem or refund)
@@ -122,7 +124,7 @@ function KindBreakdown({ byKind }: { byKind: AdminOverview['byKind'] }) {
 
 type SortKey = 'created' | 'name' | 'heldUsd' | 'country';
 
-type Section = 'overview' | 'coupons' | 'businesses' | 'settings' | 'apps';
+type Section = 'overview' | 'coupons' | 'businesses' | 'settings' | 'apps' | 'audit';
 
 export default function Admin() {
   const [section, setSection] = useState<Section>('overview');
@@ -130,9 +132,9 @@ export default function Admin() {
   return (
     <div className="admin">
       <nav className="admin-nav" aria-label="Admin sections">
-        {(['overview', 'coupons', 'businesses', 'settings', 'apps'] as Section[]).map(s => (
+        {(['overview', 'coupons', 'businesses', 'settings', 'apps', 'audit'] as Section[]).map(s => (
           <button key={s} aria-current={section === s} onClick={() => setSection(s)}>
-            {{ overview: 'Overview', coupons: 'Promo codes', businesses: 'Businesses', settings: 'Rewards settings', apps: 'Lyr apps' }[s]}
+            {{ overview: 'Overview', coupons: 'Promo codes', businesses: 'Businesses', settings: 'Settings', apps: 'Lyr apps', audit: 'Audit log' }[s]}
             {s === 'businesses' && waiting > 0 && <span className="count">{waiting}</span>}
           </button>
         ))}
@@ -142,6 +144,7 @@ export default function Admin() {
       {section === 'businesses' && <Businesses />}
       {section === 'settings' && <Settings />}
       {section === 'apps' && <AdminApps />}
+      {section === 'audit' && <AuditLog />}
     </div>
   );
 }
@@ -153,6 +156,7 @@ function Overview({ onWaiting, onOpen }: { onWaiting: (n: number) => void; onOpe
   const [loading, setLoading] = useState(false);
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<{ key: SortKey; desc: boolean }>({ key: 'created', desc: true });
+  const [openSub, setOpenSub] = useState<string | null>(null);
 
   const load = () => {
     setLoading(true);
@@ -257,7 +261,7 @@ function Overview({ onWaiting, onOpen }: { onWaiting: (n: number) => void; onOpe
 
         <section className="card span-2">
           <div className="section-head">
-            <h2>Accounts <span className="muted">({users.length})</span></h2>
+            <h2>Accounts <span className="muted">({users.length}) · click one to view or change anything</span></h2>
             <input type="search" placeholder="Search name, email, phone or country" value={query} onChange={e => setQuery(e.target.value)} />
           </div>
           <div className="table-wrap">
@@ -273,12 +277,12 @@ function Overview({ onWaiting, onOpen }: { onWaiting: (n: number) => void; onOpe
               </thead>
               <tbody>
                 {users.map(u => (
-                  <tr key={`${u.email}${u.phone}${u.created}`}>
+                  <tr key={u.sub} className="clickable" onClick={() => setOpenSub(u.sub)} tabIndex={0} onKeyDown={e => e.key === 'Enter' && setOpenSub(u.sub)}>
                     <td>
                       <div className="person">
                         <span className="avatar">{(u.name || u.email || u.phone || '?')[0].toUpperCase()}</span>
                         <div>
-                          <strong>{u.name || '—'}{u.business === 'approved' && <span className="tag">Business</span>}{u.referred && <span className="tag soft">Referred</span>}</strong>
+                          <strong>{u.name || '—'}{u.frozen && <span className="tag warn">Frozen</span>}{u.kyc === 'verified' && <span className="tag">Verified</span>}{u.business === 'approved' && <span className="tag">Business</span>}{u.referred && <span className="tag soft">Referred</span>}</strong>
                           <span>{u.email || u.phone}</span>
                         </div>
                       </div>
@@ -313,6 +317,7 @@ function Overview({ onWaiting, onOpen }: { onWaiting: (n: number) => void; onOpe
           ) : <p className="empty">No payments yet.</p>}
         </section>
       </div>
+      {openSub && <AdminAccount sub={openSub} onClose={() => setOpenSub(null)} onChanged={load} />}
     </div>
   );
 }

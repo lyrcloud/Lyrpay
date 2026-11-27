@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Lyrpay</title>
+  <style>
+    body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background: #f5f6fb; color: #11142a; text-align: center; }
+    main { padding: 24px; max-width: 320px; }
+    h1 { font-size: 20px; margin: 16px 0 8px; }
+    p { color: #646985; line-height: 1.5; margin: 0 0 24px; }
+    button { background: #5b5bf6; color: #fff; border: 0; border-radius: 999px; padding: 12px 28px; font-size: 16px; }
+  </style>
+</head>
+<body>
+  <main>
+    <svg width="72" height="72" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+      <defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7c5cff"/><stop offset="0.55" stop-color="#5b5bf6"/><stop offset="1" stop-color="#18c8e8"/></linearGradient></defs>
+      <rect width="64" height="64" rx="18" fill="url(#bg)"/>
+      <path d="M22 15v26a6 6 0 0 0 6 6h16" fill="none" stroke="#fff" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M33 31l13-13M37 17.5h9.5V27" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    <h1>You're offline</h1>
+    <p>Lyrpay needs an internet connection. Check your connection and try again.</p>
+    <button onclick="location.href='https://lyrpay.com/'">Try again</button>
+  </main>
+</body>
+</html>

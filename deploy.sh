@@ -64,7 +64,8 @@ echo "Building web dashboard..."
 
 BUCKET=$(output SiteBucketName)
 aws s3 sync frontend/dist/assets "s3://$BUCKET/assets" --cache-control "public,max-age=31536000,immutable"
-aws s3 sync frontend/dist "s3://$BUCKET" --delete --exclude "assets/*" --cache-control "no-cache"
+# downloads/ holds the Android APK (mobile/publish-apk.sh), which isn't part of the site build
+aws s3 sync frontend/dist "s3://$BUCKET" --delete --exclude "assets/*" --exclude "downloads/*" --cache-control "no-cache"
 aws cloudfront create-invalidation --distribution-id "$(output DistributionId)" --paths "/*" >/dev/null
 
 echo "Lyrpay is live at $SITE_URL"

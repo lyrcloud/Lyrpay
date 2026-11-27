@@ -233,6 +233,13 @@ export function Settings() {
           <label>Points per $1 of conversion fees (100 points = $1)<input inputMode="decimal" value={form.pointsPerFeeUsd ?? ''} onChange={set('pointsPerFeeUsd')} /></label>
           <label>Affiliate commission (% of referred friends' fees, as points)<input inputMode="decimal" value={form.affiliatePercent ?? ''} onChange={set('affiliatePercent')} /></label>
         </div>
+        <label>Verification needed to withdraw
+          <select value={form.kycWithdrawLevel ?? '0'} onChange={e => setForm(f => ({ ...f, kycWithdrawLevel: e.target.value }))}>
+            <option value="0">None</option>
+            <option value="1">A verified mobile number</option>
+            <option value="2">Mobile number and photo ID with selfie</option>
+          </select>
+        </label>
         <p className="hint">Points and commission come out of conversion fees only, so they never cost more than Lyrpay earns: 10 points per fee dollar gives back 10%, and 20% commission pays referrers a fifth of their friends' fees, for good.</p>
         <p className="hint">Everyone else converts at {data.standardFeeBps / 100}%. Bonuses are paid once per referred person, after their first qualifying top-up. Set a bonus to 0 to stop paying it.</p>
         {error && <p className="error">{error}</p>}

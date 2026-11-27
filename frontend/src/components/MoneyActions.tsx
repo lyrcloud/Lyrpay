@@ -38,6 +38,9 @@ function useAction() {
   return { busy, error, run };
 }
 
+/** "a, b and c" */
+const listText = (items: string[]) => (items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`);
+
 /** Ways to pay from the person's country, by the same rule for everyone: cards everywhere, plus the local methods
  * switched on in Stripe for that country. */
 function WaysToPay({ currency, home, onWays }: { currency: string; home: string; onWays: (ways: TopUpMethods | null) => void }) {
@@ -59,17 +62,17 @@ function WaysToPay({ currency, home, onWays }: { currency: string; home: string;
   if (ways?.cardsOnly) {
     main = (
       <p className="hint">
-        From {from}, pay with a Visa or Mastercard debit or credit card, or Apple Pay or Google Pay. Ask your bank to
-        switch on international online payments first. Local wallets and bank transfers aren't available there yet.
+        From {from}, pay with {listText(ways.cards)}. Ask your bank to switch on international online payments first.
+        Local wallets and bank transfers aren't available there yet.
       </p>
     );
   } else if (ways?.country && ways.local.length) {
     const local = ways.local.map(m => (m.currency && m.currency !== currency ? `${m.label} (pay in ${m.currency})` : m.label));
-    main = <p className="hint">From {from}: {ways.cards.join(', ')}, and {local.join(', ')}. All through Stripe.</p>;
+    main = <p className="hint">From {from}, pay with {listText([...ways.cards, ...local])}, all through Stripe.</p>;
   } else {
     main = (
       <p className="hint">
-        Pay by card, Apple Pay, Google Pay, bank or a local payment method in your country, through Stripe.
+        Pay by card, wallet, bank or a local payment method in your country, through Stripe.
       {ways && !ways.country && ' Choose your country at the top of your wallet to see which ones work where you are.'}
       </p>
     );

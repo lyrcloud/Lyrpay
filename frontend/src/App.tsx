@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import AuthPage from './components/AuthPage';
+import GetApp from './components/GetApp';
 import Dashboard from './components/Dashboard';
 import PayPage from './components/PayPage';
 import { api, type CheckoutSummary } from './lib/api';
@@ -65,6 +66,7 @@ export default function App() {
       .finally(done);
   }, []);
 
+  if (location.pathname === '/app') return <GetApp />;
   if (onCallback && !signedIn && !callbackError) return <p className="empty center-page">Signing you in…</p>;
   if (!signedIn) {
     return (

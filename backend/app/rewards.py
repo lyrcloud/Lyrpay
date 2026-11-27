@@ -37,8 +37,10 @@ MONTHLY_VOLUMES = ("under-10k", "10k-100k", "100k-1m", "over-1m")
 
 DEFAULT_SETTINGS = {"referrerBonusUsd": Decimal("5"), "friendBonusUsd": Decimal("0"),
                     "referralMinTopupUsd": Decimal("20"), "businessFeeBps": Decimal("25"),
-                    "pointsPerFeeUsd": Decimal("10"), "affiliatePercent": Decimal("20")}
-SETTING_LIMITS = {"referrerBonusUsd": (0, 100), "friendBonusUsd": (0, 100), "referralMinTopupUsd": (0, 1000),
+                    "pointsPerFeeUsd": Decimal("10"), "affiliatePercent": Decimal("20"),
+                    # KYC level needed to withdraw: 0 nobody is asked, 1 a verified mobile number, 2 photo ID too
+                    "kycWithdrawLevel": Decimal("0")}
+SETTING_LIMITS = {"kycWithdrawLevel": (0, 2), "referrerBonusUsd": (0, 100), "friendBonusUsd": (0, 100), "referralMinTopupUsd": (0, 1000),
                   "businessFeeBps": (0, 200), "pointsPerFeeUsd": (0, 100), "affiliatePercent": (0, 50)}
 COUPON_AUDIENCES = ("everyone", "business", "personal")
 
@@ -104,7 +106,7 @@ def settings() -> dict:
 
 
 def public_settings(values: dict) -> dict:
-    return {k: (int(v) if k == "businessFeeBps" else str(v)) for k, v in values.items()}
+    return {k: (int(v) if k in ("businessFeeBps", "kycWithdrawLevel") else str(v)) for k, v in values.items()}
 
 
 def save_settings(body: dict, admin_email: str) -> dict:
@@ -115,7 +117,7 @@ def save_settings(body: dict, admin_email: str) -> dict:
         value = _decimal(body[key], "Enter numbers for the rewards settings.")
         if not low <= value <= high:
             raise ValueError(f"{key} must be {low} to {high}.")
-        values[key] = value.quantize(Decimal("1")) if key == "businessFeeBps" else value.quantize(Decimal("0.01"))
+        values[key] = value.quantize(Decimal("1")) if key in ("businessFeeBps", "kycWithdrawLevel") else value.quantize(Decimal("0.01"))
     table().put_item(Item={"pk": "SETTINGS", "sk": "REWARDS", **values, "updatedBy": admin_email, "updated": _now()})
     return values
 

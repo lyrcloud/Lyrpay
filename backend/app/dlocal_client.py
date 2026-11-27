@@ -56,9 +56,15 @@ def keys() -> dict | None:
                 _keys = json.loads(boto3.client("secretsmanager").get_secret_value(SecretId=SECRET_ID)["SecretString"])
             except Exception:
                 pass  # keep the keys already read; with none yet, look again next time
-    if not _keys or not _keys.get("api_key") or not _keys.get("secret_key") or _keys.get("env") not in HOSTS:
+    if not _keys or not real(_keys.get("api_key")) or not real(_keys.get("secret_key")) or _keys.get("env") not in HOSTS:
         return None
     return _keys
+
+
+def real(value) -> bool:
+    """False for a missing key or one still holding an example's placeholder (PASTE_API_KEY and the like)."""
+    text = str(value or "").strip()
+    return len(text) >= 8 and not any(word in text.upper() for word in ("PASTE", "_HERE", "YOUR_", "PLACEHOLDER"))
 
 
 def env() -> str:

@@ -47,7 +47,10 @@ LOCAL = {
     "alipay": ("Alipay", {"CN", "HK"}, None),
     "wechat_pay": ("WeChat Pay", {"CN", "HK"}, None),
 }
-CARDS = ["Visa, Mastercard and other cards", "Apple Pay", "Google Pay", "Link"]
+CARD = "cards (Visa, Mastercard and more)"
+# Wallets Checkout offers on top of cards, each only once it's switched on in the Stripe Dashboard
+WALLETS = {"apple_pay": "Apple Pay", "google_pay": "Google Pay", "link": "Link"}
+CARDS = [CARD, *WALLETS.values()]  # what's claimed when Stripe won't say what's switched on
 
 logger = logging.getLogger("lyrpay")
 
@@ -70,7 +73,7 @@ def enabled() -> set | None:
             default = next((c for c in own if c.get("is_default")), own[0] if own else None)
             if default is not None:
                 _enabled = {
-                    kind for kind in LOCAL
+                    kind for kind in (*LOCAL, *WALLETS)
                     if (default.get(kind) or {}).get("available")
                     and ((default.get(kind) or {}).get("display_preference") or {}).get("value") == "on"
                 }
@@ -95,7 +98,7 @@ def for_country(country: str) -> dict:
     local.sort(key=lambda m: LOCAL[m["type"]][1] is EVERYWHERE)
     return {
         "country": country,
-        "cards": CARDS,
+        "cards": CARDS if known is None else [CARD, *(label for kind, label in WALLETS.items() if kind in on)],
         "local": local,
         # Stripe has nothing local switched on for this country: internationally enabled cards are the way to pay.
         # Not claimed when Stripe wouldn't say what's switched on

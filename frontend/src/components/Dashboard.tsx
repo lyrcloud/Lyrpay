@@ -11,6 +11,7 @@ import LiveMarkets, { Ticker } from './LiveMarkets';
 import Logo, { SiteFooter } from './Logo';
 import { AddMoney, Convert, CurrencySelect, SendMoney, Withdraw } from './MoneyActions';
 import { Activity, Connections } from './Panels';
+import Verify from './Verify';
 
 type Tab = 'wallet' | 'cards' | 'rewards' | 'business' | 'markets' | 'connect' | 'admin';
 const TABS: Tab[] = ['wallet', 'cards', 'rewards', 'business', 'markets', 'connect', 'admin'];
@@ -51,6 +52,7 @@ export default function Dashboard({ onSignedOut }: { onSignedOut: () => void }) 
     api.me().then(async ({ profile, admin, ...rest }) => {
       setStatement(rest);
       setAdmin(admin);
+      if (rest.frozen) setError("Your account is on hold, so money can't move right now. Please contact Lyrpay support.");
       if (!admin) setTabState(t => (t === 'admin' ? 'wallet' : t));
       // Signed up through a friend's link: record the referral once
       const referral = pendingReferral();
@@ -175,6 +177,8 @@ export default function Dashboard({ onSignedOut }: { onSignedOut: () => void }) 
               {action === 'convert' && <Convert {...shared} />}
               {action === 'withdraw' && <Withdraw {...shared} enabled={cardPayments} />}
             </section>
+
+            <Verify onNotice={setNotice} />
 
             <section className="card span-2">
               <h2>Activity</h2>

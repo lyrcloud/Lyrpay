@@ -51,7 +51,9 @@ def keys() -> dict | None:
                 _keys = json.loads(boto3.client("secretsmanager").get_secret_value(SecretId=SECRET_ID)["SecretString"])
             except Exception:
                 pass  # keep the keys already read; with none yet, look again next time
-    if not _keys or not _keys.get("token") or _keys.get("env") not in HOSTS:
+    token = str((_keys or {}).get("token") or "")
+    # An example's placeholder (NEW_TOKEN_HERE) counts as no token
+    if not _keys or len(token) < 8 or "_HERE" in token.upper() or "PASTE" in token.upper() or _keys.get("env") not in HOSTS:
         return None
     return _keys
 

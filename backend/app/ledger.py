@@ -105,7 +105,8 @@ def ensure_profile(user: User) -> dict:
         profile = {"pk": pk, "sk": "PROFILE", "name": user.name, "currency": "USD", "country": "", "created": _now()}
     for field in ("name", "email", "phone"):
         value = getattr(user, field)
-        if value and profile.get(field) != value:
+        # A field the admin set by hand stays as they set it
+        if value and profile.get(field) != value and field not in (profile.get("adminSet") or []):
             profile[field] = value
             changed = True
     if changed:

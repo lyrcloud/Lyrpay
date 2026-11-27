@@ -10,8 +10,10 @@ node_modules
 frontend/dist
 frontend/.vite
 frontend/.env.local
-mobile/.expo
-mobile/.expo-shared
+mobile/android/app/build
+mobile/android/.gradle
+mobile/android/keystore.properties
+mobile/android/local.properties
 
 # AWS
 .aws-sam

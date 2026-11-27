@@ -710,3 +710,52 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .keys-once h3 { margin: 0; }
 .pay-intro .pay-amount { font-size: clamp(2.4rem, 6vw, 3.4rem); margin: 4px 0; }
 .pay-steps { margin: 14px 0; padding-left: 20px; display: grid; gap: 8px; }
+
+/* ── Super admin: account editor drawer, audit log ───────────────────────── */
+.drawer { position: fixed; inset: 0; z-index: 50; display: flex; justify-content: flex-end; background: rgb(11 16 32 / 0.45); }
+.drawer-panel {
+  width: min(760px, 100%); height: 100%; overflow-y: auto; background: var(--bg); padding: 20px;
+  display: flex; flex-direction: column; gap: 14px; box-shadow: var(--shadow-lift);
+}
+.drawer-panel h2 { margin: 0; }
+.drawer-panel h3 { margin: 0 0 10px; display: flex; align-items: center; gap: 8px; }
+.admin-form { display: flex; flex-direction: column; gap: 10px; }
+.form-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; }
+.button-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.button.danger { background: var(--negative); border-color: var(--negative); color: #fff; }
+.button.danger:disabled { opacity: 0.5; }
+.danger-zone { border: 1px solid color-mix(in srgb, var(--negative) 45%, var(--border)); }
+.tag.warn { background: color-mix(in srgb, var(--warn) 18%, transparent); background-image: none; color: var(--warn); }
+ul.facts { list-style: none; padding: 0; }
+ul.facts li { display: flex; flex-direction: column; gap: 2px; }
+ul.facts li span { color: var(--muted); font-size: 0.75rem; font-weight: 600; }
+ul.facts li strong { font-size: 0.88rem; overflow-wrap: anywhere; font-weight: 600; }
+.admin-lines { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.admin-lines > li { border-top: 1px solid var(--border); }
+.line-row {
+  width: 100%; display: grid; grid-template-columns: 1fr auto auto; gap: 12px; align-items: center; text-align: left;
+  padding: 10px 4px; background: none; border: 0; color: inherit; font: inherit; cursor: pointer;
+}
+.line-row:hover, .line-row:focus-visible { background: var(--surface-2); }
+.line-form { padding: 12px 0; }
+.audit-json { margin: 0 0 10px; padding: 10px; max-height: 320px; overflow: auto; background: var(--surface-2); border-radius: 8px; font-size: 12px; }
+.mono { font-family: ui-monospace, Menlo, Consolas, monospace; }
+.currency-input { max-width: 90px; text-transform: uppercase; }
+tr.clickable { cursor: pointer; }
+tr.clickable:hover, tr.clickable:focus-visible { background: var(--surface-2); }
+label.check { flex-direction: row; align-items: center; gap: 8px; }
+
+/* ── Verification card ───────────────────────────────────────────────────── */
+.verify-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 14px; }
+.verify-steps > li { padding: 12px; border: 1px solid var(--border); border-radius: 10px; }
+.verify-steps > li.done { border-color: color-mix(in srgb, var(--positive) 45%, var(--border)); }
+.inline-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
+.inline-form input { flex: 1 1 180px; }
+
+/* ── lyrpay.com/app ──────────────────────────────────────────────────────── */
+.get-app { max-width: 640px; margin: 0 auto; }
+.get-app .card { display: flex; flex-direction: column; gap: 12px; align-items: flex-start; }
+.get-app-head { display: flex; align-items: center; gap: 14px; }
+.get-app-head h1 { margin: 0; }
+.get-app ol { margin: 0; padding-left: 20px; line-height: 1.7; }
+.site-footer a { color: inherit; }

@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
-from app import cards, dlocal_client, ledger, merchants, lyrbot, mail, paypal_client, plaid_client, rates, rewards, stocks, stripe_app, stripe_client, topup_methods, wise_client
+from app import admin_ops, cards, dlocal_client, kyc, ledger, merchants, lyrbot, mail, paypal_client, plaid_client, rates, rewards, stocks, stripe_app, stripe_client, topup_methods, wise_client
 from app.auth import User, current_user
 from app.money import exponent, from_minor, parse_amount, quantize
 
@@ -54,6 +54,26 @@ async def stripe_app_cors(request: Request, call_next):
     response = await call_next(request)
     response.headers.update(headers)
     return response
+
+
+def checked_user(request: Request, user: User = Depends(current_user)) -> User:
+    """The signed-in person, refused anything that changes their account while an admin has frozen it (looking is fine)."""
+    if request.method not in ("GET", "HEAD", "OPTIONS") and not is_admin(user):
+        profile = ledger.get_item(f"USER#{user.sub}", "PROFILE") or {}
+        if profile.get("frozen"):
+            raise HTTPException(status_code=423, detail="Your account is on hold, so money can't move right now. "
+                                "Please contact Lyrpay support.")
+    return user
+
+
+@app.exception_handler(kyc.KycError)
+def kyc_error(_: Request, error: kyc.KycError):
+    return JSONResponse(status_code=error.status, content={"detail": str(error)})
+
+
+@app.exception_handler(admin_ops.NotFound)
+def not_found(_: Request, error: Exception):
+    return JSONResponse(status_code=404, content={"detail": str(error)})
 
 
 @app.exception_handler(ValueError)
@@ -162,7 +182,7 @@ async def phone_auth(action: str, request: Request):
 
 
 @app.get("/api/me")
-def me(user: User = Depends(current_user)):
+def me(user: User = Depends(checked_user)):
     profile = ledger.ensure_profile(user)
     settle_withdrawals(user.sub, profile)
     settle_topups(user.sub)
@@ -174,8 +194,54 @@ def me(user: User = Depends(current_user)):
         "profile": {k: profile.get(k, "") for k in ("name", "email", "phone", "currency", "country")},
         "admin": is_admin(user),
         "business": rewards.public_business(profile.get("business")),
+        "kyc": kyc.public(profile.get("kyc")),
+        "frozen": bool(profile.get("frozen")),
         **statement(user.sub),
     }
+
+
+# ── Verification (KYC): a carrier-checked mobile number, then a photo ID with a selfie ──
+
+@app.get("/api/kyc")
+def my_kyc(user: User = Depends(checked_user)):
+    profile = ledger.ensure_profile(user)
+    return {"kyc": kyc.public(kyc.refresh_document(user.sub, profile)), "withdrawLevel": int(rewards.settings()["kycWithdrawLevel"])}
+
+
+class KycPhone(BaseModel):
+    phone: str
+
+
+@app.post("/api/kyc/phone")
+def kyc_phone_start(body: KycPhone, user: User = Depends(checked_user)):
+    ledger.ensure_profile(user)
+    phone = re.sub(r"[\s().-]", "", body.phone or "")
+    if not PHONE.match(phone):
+        raise ValueError("Enter your mobile number with the country code, like +91 98765 43210.")
+    return kyc.start_phone(user.sub, phone)
+
+
+class KycCode(BaseModel):
+    code: str
+
+
+@app.post("/api/kyc/phone/check")
+def kyc_phone_check(body: KycCode, user: User = Depends(checked_user)):
+    return {"kyc": kyc.public(kyc.check_phone(user.sub, body.code.strip()))}
+
+
+@app.post("/api/kyc/document")
+def kyc_document(request: Request, user: User = Depends(checked_user)):
+    ledger.ensure_profile(user)
+    return {"url": kyc.start_document(user.sub, f"{site_origin(request)}/?kyc=done")}
+
+
+def require_kyc(profile: dict):
+    """Withdrawals wait for the KYC level the admin asks for (Rewards settings); 0 asks nothing."""
+    needed = int(rewards.settings()["kycWithdrawLevel"])
+    if kyc.level(profile.get("kyc")) < needed:
+        what = "your mobile number" if needed == 1 else "your mobile number and photo ID"
+        raise HTTPException(status_code=403, detail=f"Verify {what} first: open Verify in your wallet.")
 
 
 def is_admin(user: User) -> bool:
@@ -183,7 +249,7 @@ def is_admin(user: User) -> bool:
     return bool(user.email) and user.email in ADMIN_EMAILS
 
 
-def admin_user(user: User = Depends(current_user)) -> User:
+def admin_user(user: User = Depends(checked_user)) -> User:
     if not is_admin(user):
         raise HTTPException(status_code=403, detail="Only Lyrpay admins can see this.")
     return user
@@ -261,6 +327,8 @@ def admin_overview(days: int = 14, _: User = Depends(admin_user)):
         "daily": [{"date": d, **v, "volumeUsd": round(v["volumeUsd"], 2)} for d, v in sorted(daily.items())],
         "users": [
             {
+                "sub": p["pk"].removeprefix("USER#"), "frozen": bool(p.get("frozen")),
+                "kyc": (p.get("kyc") or {}).get("status", "") if isinstance(p.get("kyc"), dict) else "",
                 "name": p.get("name", ""), "email": p.get("email", ""), "phone": p.get("phone", ""),
                 "country": p.get("country", ""), "currency": p.get("currency", ""), "created": p.get("created", ""),
                 "heldUsd": round(held_by_user.get(p["pk"], 0.0), 2), "payouts": bool(p.get("payoutAccount") or p.get("bank")),
@@ -284,7 +352,7 @@ class ProfileUpdate(BaseModel):
 
 
 @app.patch("/api/me")
-def update_me(body: ProfileUpdate, user: User = Depends(current_user)):
+def update_me(body: ProfileUpdate, user: User = Depends(checked_user)):
     country = body.country.upper() if body.country else None
     if country and not re.match(r"^[A-Z]{2}$", country):
         raise ValueError("Choose a country.")
@@ -392,7 +460,7 @@ class TopUp(BaseModel):
 
 
 @app.post("/api/topup")
-def topup(body: TopUp, request: Request, user: User = Depends(current_user)):
+def topup(body: TopUp, request: Request, user: User = Depends(checked_user)):
     currency = currency_code(body.currency)
     amount = parse_amount(body.amount, currency)
     # Stripe won't take a payment under $0.50, or its worth in another currency
@@ -685,7 +753,7 @@ def checkout_credit(session: dict) -> tuple[str, Decimal]:
 
 
 @app.get("/api/coupons/check")
-def coupon_check(code: str, amount: str, currency: str, user: User = Depends(current_user)):
+def coupon_check(code: str, amount: str, currency: str, user: User = Depends(checked_user)):
     """The bonus a promo code would add to this top-up."""
     currency = currency_code(currency)
     coupon, bonus = rewards.coupon_bonus(code, user.sub, currency, parse_amount(amount, currency))
@@ -693,7 +761,7 @@ def coupon_check(code: str, amount: str, currency: str, user: User = Depends(cur
 
 
 @app.get("/api/topup/methods")
-def topup_methods_for_me(currency: str = "", user: User = Depends(current_user)):
+def topup_methods_for_me(currency: str = "", user: User = Depends(checked_user)):
     """Ways to pay a top-up from the person's country: cards everywhere, plus the local methods Stripe has switched on.
     chargedIn is USD when Stripe can't charge in the chosen currency."""
     ways = topup_methods.for_country(ledger.ensure_profile(user).get("country", ""))
@@ -715,7 +783,7 @@ class TopUpConfirm(BaseModel):
 
 
 @app.post("/api/topup/confirm")
-def topup_confirm(body: TopUpConfirm, user: User = Depends(current_user)):
+def topup_confirm(body: TopUpConfirm, user: User = Depends(checked_user)):
     if body.sessionId.startswith("paypal_"):
         return confirm_paypal(user, body.sessionId)
     if body.sessionId.startswith("dlocal_"):
@@ -806,7 +874,7 @@ class Convert(BaseModel):
 
 
 @app.post("/api/convert")
-def convert(body: Convert, user: User = Depends(current_user)):
+def convert(body: Convert, user: User = Depends(checked_user)):
     source, target = currency_code(body.source), currency_code(body.target)
     if source == target:
         raise ValueError("Pick two different currencies.")
@@ -838,7 +906,7 @@ def handle_of(raw: str) -> str:
 
 
 @app.get("/api/recipient")
-def recipient(q: str, user: User = Depends(current_user)):
+def recipient(q: str, user: User = Depends(checked_user)):
     found = ledger.find_recipient(handle_of(q))
     if not found:
         raise HTTPException(status_code=409, detail="No Lyrpay account uses that email or number yet.")
@@ -855,7 +923,7 @@ class Transfer(BaseModel):
 
 
 @app.post("/api/transfer")
-def transfer(body: Transfer, user: User = Depends(current_user)):
+def transfer(body: Transfer, user: User = Depends(checked_user)):
     currency = currency_code(body.currency)
     amount = parse_amount(body.amount, currency)
     found = ledger.find_recipient(handle_of(body.to))
@@ -1153,7 +1221,7 @@ def wise_info(user: User, profile: dict) -> dict | None:
 
 
 @app.get("/api/payouts")
-def payouts(user: User = Depends(current_user)):
+def payouts(user: User = Depends(checked_user)):
     """Whether the person can withdraw yet, and in which currency."""
     profile = ledger.ensure_profile(user)
     try:
@@ -1185,7 +1253,7 @@ class Onboard(BaseModel):
 
 
 @app.post("/api/payouts/onboard")
-def payouts_onboard(request: Request, body: Onboard | None = None, user: User = Depends(current_user)):
+def payouts_onboard(request: Request, body: Onboard | None = None, user: User = Depends(checked_user)):
     """A page where the person adds their bank account: Plaid's, or Stripe's (which also checks their identity)."""
     profile = ledger.ensure_profile(user)
     if plaid_payouts(user.email):
@@ -1220,7 +1288,7 @@ class WiseForm(BaseModel):
 
 
 @app.post("/api/wise/requirements")
-def wise_requirements(body: WiseForm, user: User = Depends(current_user)):
+def wise_requirements(body: WiseForm, user: User = Depends(checked_user)):
     """Wise's bank details form for a currency: the kinds of account it can pay there, each with its fields. Sent
     again with what's filled in when a field changes the rest of the form."""
     if not wise_payouts(user.email):
@@ -1244,7 +1312,7 @@ def recipient_label(holder: str, kind: str, details: dict) -> str:
 
 
 @app.post("/api/wise/recipient")
-def wise_recipient(body: WiseRecipient, user: User = Depends(current_user)):
+def wise_recipient(body: WiseRecipient, user: User = Depends(checked_user)):
     """Save the person's bank account with Wise for withdrawals in that currency (replacing one saved before)."""
     if not wise_payouts(user.email):
         raise HTTPException(status_code=503, detail="Wise withdrawals aren't switched on yet.")
@@ -1273,7 +1341,7 @@ def wise_source_amount(amount: Decimal, currency: str) -> Decimal:
 
 
 @app.get("/api/wise/quote")
-def wise_quote(currency: str, amount: str, user: User = Depends(current_user)):
+def wise_quote(currency: str, amount: str, user: User = Depends(checked_user)):
     """What arrives in the bank for a Wise withdrawal, after Wise's fee."""
     if not wise_payouts(user.email):
         raise HTTPException(status_code=503, detail="Wise withdrawals aren't switched on yet.")
@@ -1294,8 +1362,9 @@ class Withdraw(BaseModel):
 
 
 @app.post("/api/withdraw")
-def withdraw(body: Withdraw, user: User = Depends(current_user)):
+def withdraw(body: Withdraw, user: User = Depends(checked_user)):
     profile = ledger.ensure_profile(user)
+    require_kyc(profile)
     if body.rail == "wise":
         return withdraw_wise(body, user, profile)
     if plaid_payouts(user.email):
@@ -1345,7 +1414,7 @@ def withdraw_wise(body: Withdraw, user: User, profile: dict) -> dict:
 # ── Rewards: referrals and gift cards ────────────────────────────────────────
 
 @app.get("/api/rewards")
-def my_rewards(user: User = Depends(current_user)):
+def my_rewards(user: User = Depends(checked_user)):
     profile = ledger.ensure_profile(user)
     return {
         "referral": rewards.referral_summary(profile, mail.SITE_URL),
@@ -1381,7 +1450,7 @@ def merchant_refund(payment_id: str, body: dict | None = None, merchant: dict = 
 
 
 @app.get("/api/pay/{payment_id}")
-def checkout_page(payment_id: str, user: User = Depends(current_user)):
+def checkout_page(payment_id: str, user: User = Depends(checked_user)):
     ledger.ensure_profile(user)
     return merchants.checkout_view(merchants.get_payment(payment_id), user.sub)
 
@@ -1393,7 +1462,7 @@ def checkout_summary(payment_id: str):
 
 
 @app.post("/api/pay/{payment_id}/topup")
-def checkout_topup(payment_id: str, request: Request, user: User = Depends(current_user)):
+def checkout_topup(payment_id: str, request: Request, user: User = Depends(checked_user)):
     """Top up exactly what's missing to pay this payment, by card; Stripe brings the person back to the payment."""
     item = merchants.get_payment(payment_id)
     view = merchants.checkout_view(item, user.sub)
@@ -1410,14 +1479,14 @@ def checkout_topup(payment_id: str, request: Request, user: User = Depends(curre
 
 
 @app.post("/api/pay/{payment_id}/approve")
-def checkout_approve(payment_id: str, user: User = Depends(current_user)):
+def checkout_approve(payment_id: str, user: User = Depends(checked_user)):
     profile = ledger.ensure_profile(user)
     redirect = merchants.approve(merchants.get_payment(payment_id), user.sub, profile.get("name") or user.name, user.email)
     return {"redirect": redirect, **statement(user.sub)}
 
 
 @app.post("/api/pay/{payment_id}/cancel")
-def checkout_cancel(payment_id: str, user: User = Depends(current_user)):
+def checkout_cancel(payment_id: str, user: User = Depends(checked_user)):
     return {"redirect": merchants.cancel(merchants.get_payment(payment_id))}
 
 
@@ -1437,7 +1506,7 @@ class PointsRedeem(BaseModel):
 
 
 @app.post("/api/points/redeem")
-def redeem_points(body: PointsRedeem, user: User = Depends(current_user)):
+def redeem_points(body: PointsRedeem, user: User = Depends(checked_user)):
     usd = rewards.redeem_points(user.sub, body.points)
     return {"usd": money(usd, "USD"), **statement(user.sub)}
 
@@ -1447,7 +1516,7 @@ class ReferralClaim(BaseModel):
 
 
 @app.post("/api/referral/claim")
-def referral_claim(body: ReferralClaim, user: User = Depends(current_user)):
+def referral_claim(body: ReferralClaim, user: User = Depends(checked_user)):
     return {"referrer": rewards.claim_referral(ledger.ensure_profile(user), body.code)}
 
 
@@ -1464,7 +1533,7 @@ def money_text(amount: Decimal, currency: str) -> str:
 
 
 @app.post("/api/giftcards")
-def buy_gift_card(body: GiftCardOrder, user: User = Depends(current_user)):
+def buy_gift_card(body: GiftCardOrder, user: User = Depends(checked_user)):
     currency = currency_code(body.currency)
     amount = parse_amount(body.amount, currency)
     details = rewards.clean_gift_card(body.model_dump())
@@ -1484,7 +1553,7 @@ class GiftCardCode(BaseModel):
 
 
 @app.post("/api/giftcards/redeem")
-def redeem_gift_card(body: GiftCardCode, user: User = Depends(current_user)):
+def redeem_gift_card(body: GiftCardCode, user: User = Depends(checked_user)):
     ledger.ensure_profile(user)
     card = rewards.redeem_gift_card(user.sub, body.code)
     return {"amount": money(card["amount"], card["currency"]), "currency": card["currency"], "from": card.get("fromName", ""),
@@ -1492,7 +1561,7 @@ def redeem_gift_card(body: GiftCardCode, user: User = Depends(current_user)):
 
 
 @app.post("/api/giftcards/cancel")
-def cancel_gift_card(body: GiftCardCode, user: User = Depends(current_user)):
+def cancel_gift_card(body: GiftCardCode, user: User = Depends(checked_user)):
     card = rewards.cancel_gift_card(user.sub, body.code)
     return {"amount": money(card["amount"], card["currency"]), "currency": card["currency"], **statement(user.sub)}
 
@@ -1500,7 +1569,7 @@ def cancel_gift_card(body: GiftCardCode, user: User = Depends(current_user)):
 # ── Business accounts ─────────────────────────────────────────────────────────
 
 @app.get("/api/business")
-def my_business(user: User = Depends(current_user)):
+def my_business(user: User = Depends(checked_user)):
     profile = ledger.ensure_profile(user)
     return {
         "business": rewards.public_business(profile.get("business")),
@@ -1510,7 +1579,7 @@ def my_business(user: User = Depends(current_user)):
 
 
 @app.post("/api/business/apply")
-def apply_business(body: dict, user: User = Depends(current_user)):
+def apply_business(body: dict, user: User = Depends(checked_user)):
     profile = ledger.ensure_profile(user)
     return {"business": rewards.public_business(rewards.apply_business(profile, rewards.clean_business(body)))}
 
@@ -1527,7 +1596,7 @@ class BulkPay(BaseModel):
 
 
 @app.post("/api/business/pay")
-def bulk_pay(body: BulkPay, user: User = Depends(current_user)):
+def bulk_pay(body: BulkPay, user: User = Depends(checked_user)):
     """An approved business pays up to BULK_MAX people in one go; nothing moves unless every line is valid."""
     profile = ledger.ensure_profile(user)
     if not rewards.is_business(profile):
@@ -1613,11 +1682,131 @@ def admin_save_settings(body: dict, admin: User = Depends(admin_user)):
     return {"settings": rewards.public_settings(rewards.save_settings(body, admin.email)), "standardFeeBps": int(FX_FEE_BPS)}
 
 
+# ── Super admin: any account's profile, balances and statement ───────────────
+# Every change is audited (admin_ops.audit_log). "rebalance" moves the balance by what a statement change makes
+# different; without it only the line changes.
+
+def admin_account(sub: str) -> dict:
+    found = admin_ops.account(sub)
+    return {"account": {**found, "kyc": kyc.public(found["profile"].get("kyc"))}}
+
+
+class AdminKyc(BaseModel):
+    override: str = ""  # "verified", "rejected", or "" to follow the checks again
+    note: str = ""
+
+
+@app.post("/api/admin/users/{sub}/kyc")
+def admin_kyc(sub: str, body: AdminKyc, admin: User = Depends(admin_user)):
+    if body.override not in ("", "verified", "rejected"):
+        raise ValueError("Choose verified, rejected or none.")
+    profile = ledger.get_item(f"USER#{sub}", "PROFILE")
+    if not profile:
+        raise admin_ops.NotFound("No Lyrpay account with that id.")
+    current = dict(profile.get("kyc") or {})
+    updated = {**current, "override": body.override, "note": body.note.strip()[:300], "reviewedBy": admin.email,
+               "reviewedAt": ledger._now()}
+    admin_ops.update_profile(admin.email, sub, {"kyc": updated}, f"KYC {body.override or 'cleared'}: {body.note}")
+    return admin_account(sub)
+
+
+def admin_amount(raw: str, currency: str) -> Decimal:
+    """A signed amount (zero allowed) in the currency's smallest units."""
+    text = (raw or "").strip().replace(",", "")
+    negative = text.startswith("-")
+    digits = text.lstrip("+-")
+    if digits.replace(".", "", 1).isdigit() and Decimal(digits) == 0:
+        return Decimal(0)
+    amount = parse_amount(digits, currency)
+    return -amount if negative else amount
+
+
+@app.get("/api/admin/users/{sub}")
+def admin_get_user(sub: str, _: User = Depends(admin_user)):
+    return admin_account(sub)
+
+
+class AdminProfileEdit(BaseModel):
+    fields: dict
+    reason: str = ""
+
+
+@app.patch("/api/admin/users/{sub}")
+def admin_edit_user(sub: str, body: AdminProfileEdit, admin: User = Depends(admin_user)):
+    admin_ops.update_profile(admin.email, sub, body.fields, body.reason)
+    return admin_account(sub)
+
+
+class AdminDelete(BaseModel):
+    reason: str = ""
+    confirm: str = ""
+
+
+@app.post("/api/admin/users/{sub}/delete")
+def admin_delete_user(sub: str, body: AdminDelete, admin: User = Depends(admin_user)):
+    if body.confirm != "DELETE":
+        raise ValueError('Type DELETE to confirm.')
+    return {"deleted": admin_ops.delete_account(admin.email, sub, body.reason)}
+
+
+class AdminBalance(BaseModel):
+    currency: str
+    amount: str  # adjust: signed change; set: the new balance
+    mode: str = "adjust"  # or "set"
+    note: str = ""
+    allowNegative: bool = False
+
+
+@app.post("/api/admin/users/{sub}/balance")
+def admin_balance(sub: str, body: AdminBalance, admin: User = Depends(admin_user)):
+    currency = currency_code(body.currency)
+    amount = admin_amount(body.amount, currency)
+    if body.mode == "set":
+        if amount < 0 and not body.allowNegative:
+            raise ValueError("A balance can't be set below zero unless you allow it.")
+        admin_ops.set_balance(admin.email, sub, currency, amount, body.note)
+    else:
+        try:
+            admin_ops.adjust(admin.email, sub, currency, amount, body.note, body.allowNegative)
+        except ledger.InsufficientFunds:
+            raise HTTPException(status_code=409, detail="That would take the balance below zero. Allow a negative balance to do it anyway.")
+    return admin_account(sub)
+
+
+class AdminLine(BaseModel):
+    fields: dict = {}
+    rebalance: bool = False
+    reason: str = ""
+
+
+@app.post("/api/admin/users/{sub}/transactions")
+def admin_add_line(sub: str, body: AdminLine, admin: User = Depends(admin_user)):
+    admin_ops.add_transaction(admin.email, sub, body.fields, body.rebalance, body.reason)
+    return admin_account(sub)
+
+
+@app.patch("/api/admin/users/{sub}/transactions/{sk:path}")
+def admin_edit_line(sub: str, sk: str, body: AdminLine, admin: User = Depends(admin_user)):
+    admin_ops.update_transaction(admin.email, sub, sk, body.fields, body.rebalance, body.reason)
+    return admin_account(sub)
+
+
+@app.post("/api/admin/users/{sub}/transactions/{sk:path}/delete")
+def admin_delete_line(sub: str, sk: str, body: AdminLine, admin: User = Depends(admin_user)):
+    admin_ops.delete_transaction(admin.email, sub, sk, body.rebalance, body.reason)
+    return admin_account(sub)
+
+
+@app.get("/api/admin/audit")
+def admin_audit(_: User = Depends(admin_user)):
+    return {"entries": admin_ops.audit_log()}
+
+
 
 # ── Cards (Stripe Issuing) ───────────────────────────────────────────────────
 
 @app.get("/api/cards")
-def my_cards(user: User = Depends(current_user)):
+def my_cards(user: User = Depends(checked_user)):
     profile = ledger.ensure_profile(user)
     live = cards.issuing_live()
     platform = stripe_call(stripe_client.platform) if live else {}
@@ -1630,14 +1819,14 @@ def my_cards(user: User = Depends(current_user)):
 
 
 @app.post("/api/cards/waitlist")
-def card_waitlist(user: User = Depends(current_user)):
+def card_waitlist(user: User = Depends(checked_user)):
     ledger.ensure_profile(user)
     ledger.update_profile(user.sub, cardWaitlist=ledger._now())
     return {"waitlisted": True}
 
 
 @app.post("/api/cards")
-def new_card(body: dict, request: Request, user: User = Depends(current_user)):
+def new_card(body: dict, request: Request, user: User = Depends(checked_user)):
     if not cards.issuing_live():
         raise HTTPException(status_code=409, detail="Lyrpay cards aren't available yet. Join the waitlist and we'll email you.")
     details = cards.clean_application(body)
@@ -1651,7 +1840,7 @@ class CardFreeze(BaseModel):
 
 
 @app.post("/api/cards/{card_id}/freeze")
-def freeze_card(card_id: str, body: CardFreeze, user: User = Depends(current_user)):
+def freeze_card(card_id: str, body: CardFreeze, user: User = Depends(checked_user)):
     return {"card": stripe_call(cards.set_frozen, user.sub, card_id, body.frozen)}
 
 
@@ -1660,7 +1849,7 @@ class CardReveal(BaseModel):
 
 
 @app.post("/api/cards/{card_id}/reveal")
-def reveal_card(card_id: str, body: CardReveal, user: User = Depends(current_user)):
+def reveal_card(card_id: str, body: CardReveal, user: User = Depends(checked_user)):
     """An ephemeral key so Stripe.js can show this card's details; only for the card's owner."""
     cards.card_of(user.sub, card_id)
     key = stripe_call(stripe_client.card_ephemeral_key, card_id, body.nonce)

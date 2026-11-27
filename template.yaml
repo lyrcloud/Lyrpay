@@ -126,6 +126,8 @@ Resources:
         - https://lyrpay.com/auth/callback
         - https://www.lyrpay.com/auth/callback
         - http://localhost:5173/auth/callback
+        # Android app: Google sign-in runs in a Custom Tab and comes back here (mobile/ MainActivity)
+        - com.lyrpay.app://auth/callback
       LogoutURLs:
         - !Ref PrimaryOrigin
         - https://lyrpay.com
@@ -163,6 +165,8 @@ Resources:
                 - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:lyrpay/paypal-*'
                 - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:lyrpay/wise-*'
                 - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:lyrpay/dlocal-*'
+                # The Twilio account the Lyr apps share: phone verification (KYC)
+                - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:lyrshop/twilio-*'
                 - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${AnthropicSecretName}-*'
                 - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${GeminiSecretName}-*'
                 - !Ref MailSigningSecret

@@ -1,28 +1,25 @@
 {
   "name": "lyrpay-mobile",
-  "version": "0.2.0",
   "private": true,
-  "main": "node_modules/expo/AppEntry.js",
+  "version": "1.0.0",
+  "description": "Lyrpay Android app (Capacitor shell around lyrpay.com)",
   "scripts": {
-    "start": "expo start",
-    "android": "expo start --android",
-    "ios": "expo start --ios",
-    "web": "expo start --web",
-    "typecheck": "tsc --noEmit",
-    "build:preview": "npx --yes eas-cli build --profile preview --platform android",
-    "build": "npx --yes eas-cli build --profile production --platform all",
-    "submit": "npx --yes eas-cli submit --profile production --platform all"
+    "sync": "cap sync",
+    "assets": "capacitor-assets generate --android --iconBackgroundColor '#5b5bf6' --splashBackgroundColor '#f5f6fb'",
+    "android:debug": "cap sync android && cd android && ./gradlew assembleDebug",
+    "android:release": "cap sync android && cd android && ./gradlew bundleRelease assembleRelease"
   },
   "dependencies": {
-    "expo": "~50.0.21",
-    "expo-secure-store": "~12.8.1",
-    "expo-status-bar": "~1.11.1",
-    "react": "18.2.0",
-    "react-native": "0.73.6"
+    "@capacitor/android": "8.5.3",
+    "@capacitor/app": "8.1.2",
+    "@capacitor/browser": "8.0.5",
+    "@capacitor/core": "8.5.3",
+    "@capacitor/splash-screen": "8.0.2",
+    "@capacitor/status-bar": "8.0.4"
   },
   "devDependencies": {
-    "@babel/core": "^7.24.0",
-    "@types/react": "~18.2.45",
-    "typescript": "^5.3.0"
+    "@capacitor/assets": "3.0.5",
+    "@capacitor/cli": "8.5.3",
+    "sharp": "^0.34.0"
   }
 }

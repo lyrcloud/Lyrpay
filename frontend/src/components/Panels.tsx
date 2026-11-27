@@ -4,7 +4,7 @@ import { formatDate, formatMoney } from '../lib/format';
 
 const KIND_LABEL: Record<Transaction['kind'], string> = {
   topup: 'Added money', payment: 'Paid', send: 'Sent', receive: 'Received', convert: 'Converted', withdraw: 'Withdrew to bank',
-  giftcard: 'Gift card', redeem: 'Redeemed gift card', refund: 'Refund', bonus: 'Bonus', card: 'Card',
+  giftcard: 'Gift card', redeem: 'Redeemed gift card', refund: 'Refund', bonus: 'Bonus', card: 'Card', adjust: 'Adjustment',
 };
 
 const STATUS_LABEL = { pending: 'Processing', failed: 'Failed, returned to balance', paid: '' };

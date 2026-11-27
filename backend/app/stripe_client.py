@@ -189,6 +189,23 @@ def find_transfer(account_id: str, reference: str) -> dict | None:
     return next((t for t in transfers if t.get("metadata", {}).get("lyrpay_tx") == reference), None)
 
 
+# Identity: a photo ID and a matching selfie (kyc.py). Needs the key's Identity permissions.
+
+def identity_session(user_sub: str, return_url: str) -> dict:
+    return _request("POST", "/identity/verification_sessions", {
+        "type": "document",
+        "options[document][require_matching_selfie]": "true",
+        "options[document][require_live_capture]": "true",
+        "metadata[lyrpay_sub]": user_sub,
+        "client_reference_id": user_sub,
+        "return_url": return_url,
+    })
+
+
+def get_identity_session(session_id: str) -> dict:
+    return _request("GET", f"/identity/verification_sessions/{session_id}")
+
+
 # Cards: Stripe Issuing makes Visa cards that spend from the Lyrpay balance (cards.py). It must be switched on for the
 # Stripe account first (Stripe reviews the business), and cardholders live in the platform's country.
 

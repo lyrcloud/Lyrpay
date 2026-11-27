@@ -11,7 +11,7 @@ export type Profile = { name: string; email: string; phone: string; currency: st
 export type Transaction = {
   id: string;
   at: string;
-  kind: 'topup' | 'send' | 'receive' | 'convert' | 'withdraw' | 'giftcard' | 'redeem' | 'refund' | 'bonus' | 'card' | 'payment';
+  kind: 'topup' | 'send' | 'receive' | 'convert' | 'withdraw' | 'giftcard' | 'redeem' | 'refund' | 'bonus' | 'card' | 'payment' | 'adjust';
   currency: string;
   amount: string;
   status?: 'pending' | 'paid' | 'failed';
@@ -91,7 +91,7 @@ export type Coupon = {
 
 export type RewardSettings = {
   referrerBonusUsd: string; friendBonusUsd: string; referralMinTopupUsd: string; businessFeeBps: number;
-  pointsPerFeeUsd: string; affiliatePercent: string;
+  pointsPerFeeUsd: string; affiliatePercent: string; kycWithdrawLevel: number;
 };
 
 export type BusinessApplication = Business & { sub: string; name: string; email: string; phone: string };
@@ -110,6 +110,28 @@ export type Quote = {
   volume: number | null; time: number | null; sparkline: number[];
 };
 
+/** Verification: level 1 a carrier-checked mobile number, level 2 a photo ID with a selfie */
+export type Kyc = {
+  status: 'unverified' | 'phone' | 'pending' | 'verified' | 'rejected';
+  level: 0 | 1 | 2;
+  phone: { number: string; lineType: string; at: string } | null;
+  document: { status: string; error: string; at: string } | null;
+  override: string;
+  note: string;
+};
+
+/** Everything Lyrpay holds about one person, for the super admin (statement lines carry their sk, the line's key) */
+export type AdminAccount = {
+  sub: string;
+  profile: Record<string, unknown> & { name?: string; email?: string; phone?: string; country?: string; currency?: string; frozen?: boolean; frozenReason?: string; created?: string; kyc?: Kyc };
+  hasBank: boolean;
+  kyc: Kyc;
+  balances: Record<string, string>;
+  transactions: (Transaction & { sk: string })[];
+};
+
+export type AuditEntry = { sk: string; at: string; admin: string; action: string; target: string; before: unknown; after: unknown; reason: string };
+
 export type AdminOverview = {
   updated: string;
   totals: {
@@ -122,6 +144,7 @@ export type AdminOverview = {
   byKind: Partial<Record<Transaction['kind'], { count: number; volumeUsd: number }>>;
   daily: { date: string; signups: number; count: number; volumeUsd: number }[];
   users: {
+    sub: string; frozen: boolean; kyc: string;
     name: string; email: string; phone: string; country: string; currency: string; created: string; heldUsd: number; payouts: boolean;
     business: string; referred: boolean;
   }[];
@@ -172,7 +195,7 @@ const post = <T>(path: string, body: unknown) => request<T>(path, { method: 'POS
 
 export const api = {
   config: () => request<{ cardPayments: boolean; fxFeeBps: number }>('/config'),
-  me: () => request<{ profile: Profile; admin: boolean; business: Business | null } & Statement>('/me'),
+  me: () => request<{ profile: Profile; admin: boolean; business: Business | null; kyc: Kyc; frozen: boolean } & Statement>('/me'),
   updateProfile: (fields: Partial<Pick<Profile, 'currency' | 'country'>>) =>
     request<{ profile: Profile }>('/me', { method: 'PATCH', body: JSON.stringify(fields) }),
   rates: (base: string) => request<{ base: string; updated: string; rates: Record<string, number> }>(`/rates?base=${base}`),
@@ -230,6 +253,25 @@ export const api = {
     post<{ sentTo: string } & Statement>('/transfer', { to, amount, currency, note }),
   payouts: () => request<Payouts>('/payouts'),
   onboardPayouts: () => post<{ url: string }>('/payouts/onboard', {}),
+  adminAccount: (sub: string) => request<{ account: AdminAccount }>(`/admin/users/${encodeURIComponent(sub)}`),
+  adminEditAccount: (sub: string, fields: Record<string, unknown>, reason = '') =>
+    request<{ account: AdminAccount }>(`/admin/users/${encodeURIComponent(sub)}`, { method: 'PATCH', body: JSON.stringify({ fields, reason }) }),
+  adminDeleteAccount: (sub: string, reason: string) => post<{ deleted: number }>(`/admin/users/${encodeURIComponent(sub)}/delete`, { confirm: 'DELETE', reason }),
+  adminBalance: (sub: string, body: { currency: string; amount: string; mode: 'adjust' | 'set'; note: string; allowNegative: boolean }) =>
+    post<{ account: AdminAccount }>(`/admin/users/${encodeURIComponent(sub)}/balance`, body),
+  adminAddLine: (sub: string, fields: Record<string, string>, rebalance: boolean, reason = '') =>
+    post<{ account: AdminAccount }>(`/admin/users/${encodeURIComponent(sub)}/transactions`, { fields, rebalance, reason }),
+  adminEditLine: (sub: string, sk: string, fields: Record<string, string>, rebalance: boolean, reason = '') =>
+    request<{ account: AdminAccount }>(`/admin/users/${encodeURIComponent(sub)}/transactions/${encodeURIComponent(sk)}`,
+      { method: 'PATCH', body: JSON.stringify({ fields, rebalance, reason }) }),
+  adminDeleteLine: (sub: string, sk: string, rebalance: boolean, reason = '') =>
+    post<{ account: AdminAccount }>(`/admin/users/${encodeURIComponent(sub)}/transactions/${encodeURIComponent(sk)}/delete`, { rebalance, reason }),
+  adminKyc: (sub: string, override: string, note: string) => post<{ account: AdminAccount }>(`/admin/users/${encodeURIComponent(sub)}/kyc`, { override, note }),
+  kyc: () => request<{ kyc: Kyc; withdrawLevel: number }>('/kyc'),
+  kycPhone: (phone: string) => post<{ sent: boolean }>('/kyc/phone', { phone }),
+  kycCheck: (code: string) => post<{ kyc: Kyc }>('/kyc/phone/check', { code }),
+  kycDocument: () => post<{ url: string }>('/kyc/document', {}),
+  adminAudit: () => request<{ entries: AuditEntry[] }>('/admin/audit'),
   adminOverview: (days = 14) => request<AdminOverview>(`/admin/overview?days=${days}`),
   withdraw: (amount: string, currency = '', rail = '') =>
     post<{ withdrawn: string; currency: string; status: 'paid' | 'pending' } & Statement>('/withdraw', { amount, currency, rail }),
