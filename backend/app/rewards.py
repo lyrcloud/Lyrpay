@@ -38,9 +38,9 @@ MONTHLY_VOLUMES = ("under-10k", "10k-100k", "100k-1m", "over-1m")
 DEFAULT_SETTINGS = {"referrerBonusUsd": Decimal("5"), "friendBonusUsd": Decimal("0"),
                     "referralMinTopupUsd": Decimal("20"), "businessFeeBps": Decimal("25"),
                     "pointsPerFeeUsd": Decimal("10"), "affiliatePercent": Decimal("20"),
-                    # KYC level needed to withdraw: 0 nobody is asked, 1 a verified mobile number, 2 photo ID too
+                    # KYC needed to withdraw: 0 nobody is asked, 1 a verified mobile number
                     "kycWithdrawLevel": Decimal("0")}
-SETTING_LIMITS = {"kycWithdrawLevel": (0, 2), "referrerBonusUsd": (0, 100), "friendBonusUsd": (0, 100), "referralMinTopupUsd": (0, 1000),
+SETTING_LIMITS = {"kycWithdrawLevel": (0, 1), "referrerBonusUsd": (0, 100), "friendBonusUsd": (0, 100), "referralMinTopupUsd": (0, 1000),
                   "businessFeeBps": (0, 200), "pointsPerFeeUsd": (0, 100), "affiliatePercent": (0, 50)}
 COUPON_AUDIENCES = ("everyone", "business", "personal")
 

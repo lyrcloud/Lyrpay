@@ -90,6 +90,9 @@ Resources:
         PointInTimeRecoveryEnabled: true
       SSESpecification:
         SSEEnabled: true
+      # Feeds ReceiptFunction: an email for every new statement line and every status change
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES
 
   # Lyrbot use counters per visitor per hour and for the whole site per day
   LyrbotLimitsTable:
@@ -207,6 +210,37 @@ Resources:
           Type: Schedule
           Properties:
             Schedule: rate(15 minutes)
+
+  # Receipt and tracking emails (app/receipts.py): each new statement line, and each status change on one
+  ReceiptFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: lyrpay-receipts
+      Handler: app.receipts.handler
+      Timeout: 60
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref LedgerTable
+        - Statement:
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Ref MailSigningSecret
+            - Effect: Allow
+              Action: ses:SendEmail
+              Resource: !Sub 'arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/lyrpay.com'
+      Events:
+        LedgerLines:
+          Type: DynamoDB
+          Properties:
+            Stream: !GetAtt LedgerTable.StreamArn
+            StartingPosition: LATEST
+            BatchSize: 25
+            MaximumBatchingWindowInSeconds: 2
+            MaximumRetryAttempts: 2
+            BisectBatchOnFunctionError: true
+            FilterCriteria:
+              Filters:
+                - Pattern: '{"eventName": ["INSERT", "MODIFY"], "dynamodb": {"Keys": {"sk": {"S": [{"prefix": "TX#"}]}}}}'
 
   # Sends an announcement from app/mail.py UPDATES to every Lyr account; invoked by hand (README)
   UpdateEmailFunction:

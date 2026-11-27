@@ -101,17 +101,16 @@ function ProfileForm({ account, busy, onSave }: { account: Account; busy: boolea
   );
 }
 
-const KYC_LABEL: Record<string, string> = { unverified: 'Not verified', phone: 'Mobile verified', pending: 'ID being checked', verified: 'Verified', rejected: 'Rejected' };
+const KYC_LABEL: Record<string, string> = { unverified: 'Not verified', verified: 'Verified', rejected: 'Rejected' };
 
 function KycPanel({ account, busy, onSave }: { account: Account; busy: boolean; onSave: (override: string, note: string) => void }) {
   const k = account.kyc;
   const [note, setNote] = useState(k.note);
   return (
     <section className="card admin-form">
-      <h3>Verification <span className={`badge ${k.level === 2 ? 'live' : k.status === 'rejected' ? 'warn' : 'soon'}`}>{KYC_LABEL[k.status] ?? k.status}</span></h3>
+      <h3>Verification <span className={`badge ${k.level === 1 ? 'live' : k.status === 'rejected' ? 'warn' : 'soon'}`}>{KYC_LABEL[k.status] ?? k.status}</span></h3>
       <ul className="facts">
         <li><span>Mobile</span><strong>{k.phone ? `${k.phone.number} · ${k.phone.lineType || 'line type unknown'} · ${formatDate(k.phone.at)}` : 'not verified'}</strong></li>
-        <li><span>Photo ID + selfie</span><strong>{k.document ? `${k.document.status}${k.document.error ? ` (${k.document.error})` : ''} · ${formatDate(k.document.at)}` : 'not started'}</strong></li>
         <li><span>Admin decision</span><strong>{k.override || 'none (follows the checks)'}</strong></li>
       </ul>
       <label>Note<input value={note} onChange={e => setNote(e.target.value)} placeholder="why, for the audit log" /></label>

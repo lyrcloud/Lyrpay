@@ -1,15 +1,13 @@
-"""Know your customer: two levels a person can reach, kept on the profile as `kyc`.
+"""Know your customer, kept on the profile as `kyc`: a verified mobile number.
 
 Level 1, phone: Twilio Lookup asks the carrier what kind of line the number is (only real mobile lines count, not VoIP
 or virtual numbers, which is what banks and UPI/M-Pesa style apps tie money to), then Twilio Verify texts a code.
 Works for numbers in any country. Uses the Twilio account the Lyr apps share (secret lyrshop/twilio).
 
-Level 2, identity: a photo ID and a matching selfie through Stripe Identity (documents from 120+ countries). Needs the
-Stripe key's Identity permissions; until then it reports itself unavailable.
 
 An admin can override the outcome (verified or rejected) from the account editor.
 
-  kyc = {phone: {number, lineType, carrier, at}, document: {session, status, error, at},
+  kyc = {phone: {number, lineType, carrier, at},
          override: "verified" | "rejected" | "", note, reviewedBy, reviewedAt}
 """
 import json
@@ -20,7 +18,7 @@ import time
 import boto3
 import httpx
 
-from app import ledger, stripe_client
+from app import ledger
 
 logger = logging.getLogger("lyrpay")
 
@@ -126,72 +124,22 @@ def check_phone(sub: str, code: str) -> dict:
     return kyc
 
 
-def identity_available() -> bool:
-    return bool(stripe_client.secret_key())
-
-
-def start_document(sub: str, return_url: str) -> str:
-    """A Stripe Identity page where the person photographs their ID and takes a selfie; returns its URL."""
-    try:
-        session = stripe_client.identity_session(sub, return_url)
-    except stripe_client.StripeError as error:
-        if "permission" in str(error).lower() or "not set up" in str(error).lower() or "activate" in str(error).lower():
-            logger.warning("Stripe Identity isn't available: %s", error)
-            raise KycError("ID verification isn't switched on yet.", 503)
-        raise KycError(str(error), 400 if error.definitive else 502)
-    profile = ledger.get_item(f"USER#{sub}", "PROFILE") or {}
-    kyc = dict(profile.get("kyc") or {})
-    kyc["document"] = {"session": session["id"], "status": session.get("status", "requires_input"), "error": "", "at": ledger._now()}
-    ledger.update_profile(sub, kyc=kyc)
-    return session["url"]
-
-
-def refresh_document(sub: str, profile: dict) -> dict:
-    """Ask Stripe how an unfinished ID check went, and keep the answer."""
-    kyc = dict(profile.get("kyc") or {})
-    document = dict(kyc.get("document") or {})
-    if not document.get("session") or document.get("status") in ("verified", "canceled"):
-        return kyc
-    try:
-        session = stripe_client.get_identity_session(document["session"])
-    except stripe_client.StripeError as error:
-        logger.warning("Identity session %s: %s", document["session"], error)
-        return kyc
-    status = session.get("status", "")
-    error = (session.get("last_error") or {}).get("reason") or ""
-    if status != document.get("status") or error != document.get("error"):
-        document.update(status=status, error=error, checked=ledger._now())
-        kyc["document"] = document
-        ledger.update_profile(sub, kyc=kyc)
-    return kyc
-
-
 def level(kyc: dict | None) -> int:
+    """1 once verified (a checked mobile number, or the admin says so), else 0."""
     kyc = kyc or {}
     if kyc.get("override") == "rejected":
         return 0
-    if kyc.get("override") == "verified" or (kyc.get("document") or {}).get("status") == "verified":
-        return 2
-    return 1 if kyc.get("phone") else 0
+    return 1 if kyc.get("override") == "verified" or kyc.get("phone") else 0
 
 
 def public(kyc: dict | None) -> dict:
     """What the person (and the admin list) sees."""
     kyc = kyc or {}
-    document = kyc.get("document") or {}
     lvl = level(kyc)
-    if kyc.get("override") == "rejected":
-        status = "rejected"
-    elif lvl == 2:
-        status = "verified"
-    elif document.get("status") == "processing":
-        status = "pending"
-    else:
-        status = "phone" if lvl == 1 else "unverified"
+    status = "rejected" if kyc.get("override") == "rejected" else "verified" if lvl else "unverified"
     phone = kyc.get("phone") or {}
     return {
         "status": status, "level": lvl,
         "phone": {"number": phone.get("number", ""), "lineType": phone.get("lineType", ""), "at": phone.get("at", "")} if phone else None,
-        "document": {"status": document.get("status", ""), "error": document.get("error", ""), "at": document.get("at", "")} if document else None,
         "override": kyc.get("override", ""), "note": kyc.get("note", ""),
     }

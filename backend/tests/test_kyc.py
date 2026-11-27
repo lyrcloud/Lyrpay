@@ -25,7 +25,7 @@ def test_mobile_number_is_verified_by_code(as_user, monkeypatch):
     assert alice.post("/api/kyc/phone", json={"phone": "+91 98765 43210"}).json()["sent"] is True
     assert alice.post("/api/kyc/phone/check", json={"code": "12"}).status_code == 400
     result = alice.post("/api/kyc/phone/check", json={"code": "123456"}).json()["kyc"]
-    assert result["level"] == 1 and result["status"] == "phone" and result["phone"]["number"] == "+919876543210"
+    assert result["level"] == 1 and result["status"] == "verified" and result["phone"]["number"] == "+919876543210"
     # The number now finds Alice for payments, and the Verify service was made once
     assert ledger.find_recipient("+919876543210")["sub"] == "alice"
     assert sum(1 for _, url, _ in sent if url.endswith("/v2/Services")) == 1
@@ -45,5 +45,5 @@ def test_withdrawals_wait_for_the_level_the_admin_asks(as_user, monkeypatch, pay
     assert response.status_code == 403 and "Verify your mobile number" in response.json()["detail"]
     # The admin can mark someone verified by hand
     acc = as_user(ADMIN).post("/api/admin/users/alice/kyc", json={"override": "verified", "note": "seen in person"}).json()["account"]
-    assert acc["kyc"]["level"] == 2
+    assert acc["kyc"]["level"] == 1 and acc["kyc"]["status"] == "verified"
     assert as_user(ALICE).post("/api/withdraw", json={"amount": "1"}).status_code != 403

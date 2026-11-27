@@ -200,12 +200,12 @@ def me(user: User = Depends(checked_user)):
     }
 
 
-# ── Verification (KYC): a carrier-checked mobile number, then a photo ID with a selfie ──
+# ── Verification (KYC): a carrier-checked mobile number ──────────────────────
 
 @app.get("/api/kyc")
 def my_kyc(user: User = Depends(checked_user)):
     profile = ledger.ensure_profile(user)
-    return {"kyc": kyc.public(kyc.refresh_document(user.sub, profile)), "withdrawLevel": int(rewards.settings()["kycWithdrawLevel"])}
+    return {"kyc": kyc.public(profile.get("kyc")), "withdrawLevel": int(rewards.settings()["kycWithdrawLevel"])}
 
 
 class KycPhone(BaseModel):
@@ -230,18 +230,11 @@ def kyc_phone_check(body: KycCode, user: User = Depends(checked_user)):
     return {"kyc": kyc.public(kyc.check_phone(user.sub, body.code.strip()))}
 
 
-@app.post("/api/kyc/document")
-def kyc_document(request: Request, user: User = Depends(checked_user)):
-    ledger.ensure_profile(user)
-    return {"url": kyc.start_document(user.sub, f"{site_origin(request)}/?kyc=done")}
-
-
 def require_kyc(profile: dict):
-    """Withdrawals wait for the KYC level the admin asks for (Rewards settings); 0 asks nothing."""
+    """Withdrawals wait for a verified mobile number when the admin asks for it (Settings); 0 asks nothing."""
     needed = int(rewards.settings()["kycWithdrawLevel"])
     if kyc.level(profile.get("kyc")) < needed:
-        what = "your mobile number" if needed == 1 else "your mobile number and photo ID"
-        raise HTTPException(status_code=403, detail=f"Verify {what} first: open Verify in your wallet.")
+        raise HTTPException(status_code=403, detail="Verify your mobile number first: open Verify in your wallet.")
 
 
 def is_admin(user: User) -> bool:
@@ -1195,11 +1188,12 @@ def connect_off() -> bool:
 
 
 def wise_payouts(email: str) -> bool:
-    """Wise withdrawals once its token is set. Sandbox only for admins, so no real balance is ever sent to a pretend bank."""
+    """Wise withdrawals once its token is set: a live token for everyone (the secret's old admins_only trial flag is
+    no longer followed), sandbox only for admins, so no real balance is ever sent to a pretend bank. A payout Lyrpay's
+    Wise balance can't cover is cancelled and the money goes back on the person's balance (fund_wise)."""
     current = wise_client.env()
     admin = bool(email) and email in ADMIN_EMAILS
-    # "admins_only" in the secret: a live token tried out by admins before customers see it
-    return admin if current == "sandbox" or (current == "live" and wise_client.admins_only()) else current == "live"
+    return admin if current == "sandbox" else current == "live"
 
 
 def wise_call(call, *args, **kwargs):

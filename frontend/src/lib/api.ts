@@ -110,12 +110,11 @@ export type Quote = {
   volume: number | null; time: number | null; sparkline: number[];
 };
 
-/** Verification: level 1 a carrier-checked mobile number, level 2 a photo ID with a selfie */
+/** Verification: a mobile number the carrier confirms is a real mobile line */
 export type Kyc = {
-  status: 'unverified' | 'phone' | 'pending' | 'verified' | 'rejected';
-  level: 0 | 1 | 2;
+  status: 'unverified' | 'verified' | 'rejected';
+  level: 0 | 1;
   phone: { number: string; lineType: string; at: string } | null;
-  document: { status: string; error: string; at: string } | null;
   override: string;
   note: string;
 };
@@ -270,7 +269,6 @@ export const api = {
   kyc: () => request<{ kyc: Kyc; withdrawLevel: number }>('/kyc'),
   kycPhone: (phone: string) => post<{ sent: boolean }>('/kyc/phone', { phone }),
   kycCheck: (code: string) => post<{ kyc: Kyc }>('/kyc/phone/check', { code }),
-  kycDocument: () => post<{ url: string }>('/kyc/document', {}),
   adminAudit: () => request<{ entries: AuditEntry[] }>('/admin/audit'),
   adminOverview: (days = 14) => request<AdminOverview>(`/admin/overview?days=${days}`),
   withdraw: (amount: string, currency = '', rail = '') =>

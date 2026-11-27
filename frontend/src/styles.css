@@ -474,8 +474,11 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .recipient { margin: 0; display: flex; gap: 8px; align-items: center; }
 
 .activity { list-style: none; padding: 0; margin: 0; }
-.activity li { display: flex; justify-content: space-between; gap: 12px; padding: 12px 0; border-top: 1px solid var(--border); }
-.activity li div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.activity li { padding: 0; border-top: 1px solid var(--border); }
+.activity-row { width: 100%; display: flex; justify-content: space-between; gap: 12px; padding: 12px 0; background: none; border: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.activity-row:hover, .activity-row:focus-visible { background: var(--surface-2); }
+.activity li.open .activity-row { padding-bottom: 6px; }
+.activity-row > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .activity span { color: var(--muted); font-size: 0.85rem; }
 .tx-amount { text-align: right; align-items: flex-end; white-space: nowrap; }
 
@@ -759,3 +762,14 @@ label.check { flex-direction: row; align-items: center; gap: 8px; }
 .get-app-head h1 { margin: 0; }
 .get-app ol { margin: 0; padding-left: 20px; line-height: 1.7; }
 .site-footer a { color: inherit; }
+
+/* ── Activity details ────────────────────────────────────────────────────── */
+.tx-details { padding: 4px 0 14px; display: flex; flex-direction: column; gap: 12px; }
+.tx-details dl { margin: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px 16px; }
+.tx-details dt { color: var(--muted); font-size: 0.75rem; font-weight: 600; }
+.tx-details dd { margin: 0; font-size: 0.88rem; overflow-wrap: anywhere; }
+.tracking { list-style: none; margin: 0; padding: 0; display: flex; gap: 6px; }
+.tracking li { flex: 1; font-size: 0.78rem; color: var(--muted); padding-top: 8px; border-top: 4px solid var(--border); }
+.tracking li.done { border-top-color: var(--positive); color: var(--text); }
+.tracking li.now { border-top-color: var(--warn); color: var(--text); font-weight: 600; }
+.tracking.failed li:last-child { border-top-color: var(--negative); }

@@ -237,7 +237,6 @@ export function Settings() {
           <select value={form.kycWithdrawLevel ?? '0'} onChange={e => setForm(f => ({ ...f, kycWithdrawLevel: e.target.value }))}>
             <option value="0">None</option>
             <option value="1">A verified mobile number</option>
-            <option value="2">Mobile number and photo ID with selfie</option>
           </select>
         </label>
         <p className="hint">Points and commission come out of conversion fees only, so they never cost more than Lyrpay earns: 10 points per fee dollar gives back 10%, and 20% commission pays referrers a fifth of their friends' fees, for good.</p>

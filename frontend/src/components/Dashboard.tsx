@@ -36,6 +36,8 @@ export default function Dashboard({ onSignedOut }: { onSignedOut: () => void }) 
     history.replaceState(null, '', next === 'wallet' ? location.pathname : `#${next}`);
   };
   const [action, setAction] = useState<Action>('add');
+  // A receipt email's "Track it" link (lyrpay.com/?tx=<id>) opens that line's details
+  const [openTx] = useState(() => new URLSearchParams(location.search).get('tx') ?? '');
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
 
@@ -182,7 +184,7 @@ export default function Dashboard({ onSignedOut }: { onSignedOut: () => void }) 
 
             <section className="card span-2">
               <h2>Activity</h2>
-              <Activity transactions={statement.transactions} />
+              <Activity transactions={statement.transactions} openId={openTx} />
             </section>
           </div>
         )}

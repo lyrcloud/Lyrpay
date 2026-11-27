@@ -136,8 +136,7 @@ def test_nest_and_label():
     assert wise_client.transaction_id("tx1") == wise_client.transaction_id("tx1") != wise_client.transaction_id("tx2")
 
 
-def test_live_wise_can_be_admins_only(as_user, wise, monkeypatch):
+def test_live_wise_is_for_everyone(as_user, wise, monkeypatch):
+    # The secret's old admins_only trial flag no longer hides live Wise from customers
     monkeypatch.setattr(wise_client, "admins_only", lambda: True)
-    assert as_user(BOB).post("/api/wise/requirements", json={"currency": "EUR"}).status_code == 503
-    monkeypatch.setattr(wise_client, "admins_only", lambda: False)
-    assert main.wise_payouts("someone@example.com")
+    assert main.wise_payouts("someone@example.com") and main.wise_payouts("")

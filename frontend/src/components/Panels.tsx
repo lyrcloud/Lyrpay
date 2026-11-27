@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { type Transaction } from '../lib/api';
 import { formatDate, formatMoney } from '../lib/format';
 
@@ -13,27 +13,73 @@ const TOPUP_STATUS_LABEL = { pending: 'On its way from your bank', failed: "Your
 const statusLabels = (kind: Transaction['kind']) =>
   kind === 'card' ? CARD_STATUS_LABEL : kind === 'topup' ? TOPUP_STATUS_LABEL : STATUS_LABEL;
 
-export function Activity({ transactions }: { transactions: Transaction[] }) {
+const RAIL: Record<string, string> = { wise: 'Wise', plaid: 'Plaid', stripe: 'Stripe' };
+
+/** Where a withdrawal or bank top-up has got to: started, on its way, then arrived or returned. */
+function Tracking({ tx }: { tx: Transaction }) {
+  const failed = tx.status === 'failed';
+  const steps = tx.kind === 'withdraw'
+    ? ['Requested', 'Sent to your bank', failed ? 'Returned to your balance' : 'Paid out']
+    : ['Started', 'On its way from your bank', failed ? "Your bank didn't pay" : 'Added to your balance'];
+  const reached = failed || tx.status === 'paid' || !tx.status ? 3 : 2;
+  return (
+    <ol className={`tracking${failed ? ' failed' : ''}`}>
+      {steps.map((step, i) => <li key={step} className={i < reached ? 'done' : i === reached ? 'now' : ''}>{step}</li>)}
+    </ol>
+  );
+}
+
+function Details({ tx }: { tx: Transaction }) {
+  const rows: [string, string][] = [
+    ['Type', KIND_LABEL[tx.kind] ?? tx.kind],
+    ['Amount', formatMoney(tx.amount, tx.currency)],
+  ];
+  if (tx.kind === 'convert' && tx.toAmount) rows.push(['You got', formatMoney(tx.toAmount, tx.toCurrency!)]);
+  const extra = tx as Transaction & { rate?: string; rail?: string; source?: string };
+  if (extra.rate) rows.push(['Rate', `1 ${tx.currency} = ${Number(extra.rate).toPrecision(6)} ${tx.toCurrency ?? ''}`]);
+  if (tx.counterparty) rows.push([tx.amount.startsWith('-') ? 'To' : 'From', tx.counterparty]);
+  if (tx.note) rows.push(['Note', tx.note]);
+  rows.push(['Status', tx.status === 'pending' ? 'Processing' : tx.status === 'failed' ? 'Failed, nothing was taken' : 'Completed']);
+  if (extra.rail) rows.push(['Paid out through', RAIL[extra.rail] ?? extra.rail]);
+  rows.push(['Date', new Date(tx.at).toLocaleString(undefined, { dateStyle: 'full', timeStyle: 'medium' })]);
+  if (tx.batch) rows.push(['Batch', 'Part of a bulk payment']);
+  rows.push(['Lyrpay reference', tx.id]);
+  if (tx.reference) rows.push(['Provider reference', tx.reference]);
+  return (
+    <div className="tx-details">
+      {['withdraw', 'topup'].includes(tx.kind) && tx.status && <Tracking tx={tx} />}
+      <dl>{rows.map(([k, v]) => <div key={k}><dt>{k}</dt><dd>{v}</dd></div>)}</dl>
+    </div>
+  );
+}
+
+export function Activity({ transactions, openId = '' }: { transactions: Transaction[]; openId?: string }) {
+  const [open, setOpen] = useState(openId);
+  useEffect(() => { if (openId) setOpen(openId); }, [openId]);
   if (!transactions.length) return <p className="empty">No activity yet. Add money to get started.</p>;
   return (
     <ul className="activity">
       {transactions.map(tx => {
         const negative = tx.amount.startsWith('-');
+        const expanded = open === tx.id;
         return (
-          <li key={tx.id}>
-            <div>
-              <strong>{KIND_LABEL[tx.kind]}{tx.counterparty && !['topup', 'withdraw'].includes(tx.kind) ? ` · ${tx.counterparty}` : ''}{tx.batch ? ' · bulk' : ''}</strong>
-              <span>
-                {formatDate(tx.at)}{tx.note ? ` · ${tx.note}` : ''}
-                {tx.status && statusLabels(tx.kind)[tx.status] ? ` · ${statusLabels(tx.kind)[tx.status]}` : ''}
-              </span>
-            </div>
-            <div className="tx-amount">
-              <strong className={tx.status === 'failed' ? 'muted' : negative ? '' : 'positive'}>
-                {negative ? '' : '+'}{formatMoney(tx.amount, tx.currency)}
-              </strong>
-              {tx.kind === 'convert' && tx.toAmount && <span>+{formatMoney(tx.toAmount, tx.toCurrency!)}</span>}
-            </div>
+          <li key={tx.id} className={expanded ? 'open' : ''}>
+            <button className="activity-row" aria-expanded={expanded} onClick={() => setOpen(expanded ? '' : tx.id)}>
+              <div>
+                <strong>{KIND_LABEL[tx.kind]}{tx.counterparty && !['topup', 'withdraw'].includes(tx.kind) ? ` · ${tx.counterparty}` : ''}{tx.batch ? ' · bulk' : ''}</strong>
+                <span>
+                  {formatDate(tx.at)}{tx.note ? ` · ${tx.note}` : ''}
+                  {tx.status && statusLabels(tx.kind)[tx.status] ? ` · ${statusLabels(tx.kind)[tx.status]}` : ''}
+                </span>
+              </div>
+              <div className="tx-amount">
+                <strong className={tx.status === 'failed' ? 'muted' : negative ? '' : 'positive'}>
+                  {negative ? '' : '+'}{formatMoney(tx.amount, tx.currency)}
+                </strong>
+                {tx.kind === 'convert' && tx.toAmount && <span>+{formatMoney(tx.toAmount, tx.toCurrency!)}</span>}
+              </div>
+            </button>
+            {expanded && <Details tx={tx} />}
           </li>
         );
       })}
