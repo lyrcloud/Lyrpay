@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { type Transaction } from '../lib/api';
-import { formatDate, formatMoney } from '../lib/format';
+import { api, type Transaction } from '../lib/api';
+import { formatDate, formatMoney, trackingNumber } from '../lib/format';
 
 const KIND_LABEL: Record<Transaction['kind'], string> = {
   topup: 'Added money', payment: 'Paid', send: 'Sent', receive: 'Received', convert: 'Converted', withdraw: 'Withdrew to bank',
@@ -15,27 +15,59 @@ const statusLabels = (kind: Transaction['kind']) =>
 
 const RAIL: Record<string, string> = { wise: 'Wise', plaid: 'Plaid', stripe: 'Stripe' };
 
-/** Where a withdrawal or bank top-up has got to: started, on its way, then arrived or returned. */
+/** Where a withdrawal or bank top-up has got to, step by step, with what it's waiting on. */
 function Tracking({ tx }: { tx: Transaction }) {
   const failed = tx.status === 'failed';
-  const steps = tx.kind === 'withdraw'
-    ? ['Requested', 'Sent to your bank', failed ? 'Returned to your balance' : 'Paid out']
-    : ['Started', 'On its way from your bank', failed ? "Your bank didn't pay" : 'Added to your balance'];
-  const reached = failed || tx.status === 'paid' || !tx.status ? 3 : 2;
+  const done = failed || tx.status === 'paid' || !tx.status;
+  let steps: string[];
+  let reached: number;
+  let note = '';
+  if (tx.kind === 'withdraw') {
+    steps = ['Requested', 'Sending', 'With your bank', failed ? 'Returned to your balance' : 'Paid out'];
+    reached = done ? 4 : tx.reference ? 2 : 1;
+    if (!done) {
+      note = tx.waiting === 'funds'
+        ? "Waiting for Lyrpay's payout funds to clear. It goes out automatically, usually within 2 business days, and we'll email you."
+        : tx.reference ? 'Your bank has it. Banks usually take 1 to 3 business days to show it.' : "We're sending it now.";
+    }
+  } else {
+    steps = ['Started', 'On its way from your bank', failed ? "Your bank didn't pay" : 'Added to your balance'];
+    reached = done ? 3 : 1;
+    if (!done) note = 'Bank payments usually take 1 to 4 business days.';
+  }
   return (
-    <ol className={`tracking${failed ? ' failed' : ''}`}>
-      {steps.map((step, i) => <li key={step} className={i < reached ? 'done' : i === reached ? 'now' : ''}>{step}</li>)}
-    </ol>
+    <>
+      <ol className={`tracking${failed ? ' failed' : ''}`}>
+        {steps.map((step, i) => <li key={step} className={i < reached ? 'done' : i === reached ? 'now' : ''}>{step}</li>)}
+      </ol>
+      {note && <p className="hint">{note}</p>}
+    </>
   );
 }
 
-function Details({ tx }: { tx: Transaction }) {
+/** Keeps a payment that's still on its way up to date: asks the provider through /api/track every 15 seconds. */
+function useLive(initial: Transaction) {
+  const [tx, setTx] = useState(initial);
+  useEffect(() => setTx(initial), [initial]);
+  const moving = tx.status === 'pending' && ['withdraw', 'topup'].includes(tx.kind);
+  useEffect(() => {
+    if (!moving) return;
+    const timer = setInterval(() => {
+      if (document.visibilityState === 'visible') api.track(tx.id).then(r => setTx(r.tx)).catch(() => {});
+    }, 15000);
+    return () => clearInterval(timer);
+  }, [moving, tx.id]);
+  return { tx, moving };
+}
+
+export function Details({ tx: initial }: { tx: Transaction }) {
+  const { tx, moving } = useLive(initial);
   const rows: [string, string][] = [
     ['Type', KIND_LABEL[tx.kind] ?? tx.kind],
     ['Amount', formatMoney(tx.amount, tx.currency)],
   ];
   if (tx.kind === 'convert' && tx.toAmount) rows.push(['You got', formatMoney(tx.toAmount, tx.toCurrency!)]);
-  const extra = tx as Transaction & { rate?: string; rail?: string; source?: string };
+  const extra = tx as Transaction & { rate?: string; source?: string };
   if (extra.rate) rows.push(['Rate', `1 ${tx.currency} = ${Number(extra.rate).toPrecision(6)} ${tx.toCurrency ?? ''}`]);
   if (tx.counterparty) rows.push([tx.amount.startsWith('-') ? 'To' : 'From', tx.counterparty]);
   if (tx.note) rows.push(['Note', tx.note]);
@@ -43,12 +75,45 @@ function Details({ tx }: { tx: Transaction }) {
   if (extra.rail) rows.push(['Paid out through', RAIL[extra.rail] ?? extra.rail]);
   rows.push(['Date', new Date(tx.at).toLocaleString(undefined, { dateStyle: 'full', timeStyle: 'medium' })]);
   if (tx.batch) rows.push(['Batch', 'Part of a bulk payment']);
-  rows.push(['Lyrpay reference', tx.id]);
+  rows.push(['Tracking number', trackingNumber(tx.id)]);
   if (tx.reference) rows.push(['Provider reference', tx.reference]);
   return (
     <div className="tx-details">
+      {moving && <span className="badge live">● Live</span>}
       {['withdraw', 'topup'].includes(tx.kind) && tx.status && <Tracking tx={tx} />}
       <dl>{rows.map(([k, v]) => <div key={k}><dt>{k}</dt><dd>{v}</dd></div>)}</dl>
+    </div>
+  );
+}
+
+/** Find a payment by its tracking number (from the app or a receipt email) and follow it live. */
+export function TrackPayment({ initial = '' }: { initial?: string }) {
+  const [number, setNumber] = useState(initial);
+  const [tx, setTx] = useState<Transaction | null>(null);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const find = async (value: string) => {
+    if (!value.trim()) return;
+    setBusy(true);
+    setError('');
+    try {
+      setTx((await api.track(value.trim())).tx);
+    } catch (err) {
+      setTx(null);
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  useEffect(() => { if (initial) find(initial); }, [initial]); // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <div className="track-payment">
+      <form className="form" onSubmit={e => { e.preventDefault(); find(number); }}>
+        <label>Track a payment <input value={number} onChange={e => setNumber(e.target.value)} placeholder="LP-XXXX-XXXX-XXXX-XXXX" autoComplete="off" spellCheck={false} /></label>
+        <button className="button" disabled={busy || !number.trim()}>{busy ? 'Finding…' : 'Track'}</button>
+      </form>
+      {error && <p className="error" role="alert">{error}</p>}
+      {tx && <Details tx={tx} />}
     </div>
   );
 }

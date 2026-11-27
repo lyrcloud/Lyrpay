@@ -10,7 +10,7 @@ import { forgetReferral, pendingReferral } from '../lib/referral';
 import LiveMarkets, { Ticker } from './LiveMarkets';
 import Logo, { SiteFooter } from './Logo';
 import { AddMoney, Convert, CurrencySelect, SendMoney, Withdraw } from './MoneyActions';
-import { Activity, Connections } from './Panels';
+import { Activity, Connections, TrackPayment } from './Panels';
 import Verify from './Verify';
 
 type Tab = 'wallet' | 'cards' | 'rewards' | 'business' | 'markets' | 'connect' | 'admin';
@@ -38,6 +38,8 @@ export default function Dashboard({ onSignedOut }: { onSignedOut: () => void }) 
   const [action, setAction] = useState<Action>('add');
   // A receipt email's "Track it" link (lyrpay.com/?tx=<id>) opens that line's details
   const [openTx] = useState(() => new URLSearchParams(location.search).get('tx') ?? '');
+  // A receipt's "Track it live" link (lyrpay.com/?track=LP-...) opens that payment's live tracker
+  const [trackNumber] = useState(() => new URLSearchParams(location.search).get('track') ?? '');
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
 
@@ -184,6 +186,7 @@ export default function Dashboard({ onSignedOut }: { onSignedOut: () => void }) 
 
             <section className="card span-2">
               <h2>Activity</h2>
+              <TrackPayment initial={trackNumber} />
               <Activity transactions={statement.transactions} openId={openTx} />
             </section>
           </div>

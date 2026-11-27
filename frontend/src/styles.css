@@ -773,3 +773,7 @@ label.check { flex-direction: row; align-items: center; gap: 8px; }
 .tracking li.done { border-top-color: var(--positive); color: var(--text); }
 .tracking li.now { border-top-color: var(--warn); color: var(--text); font-weight: 600; }
 .tracking.failed li:last-child { border-top-color: var(--negative); }
+.track-payment { margin-bottom: 16px; }
+.track-payment .form { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; }
+.track-payment .form label { flex: 1; min-width: 220px; }
+.track-payment .tx-details { margin-top: 12px; }

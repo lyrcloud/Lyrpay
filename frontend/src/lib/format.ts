@@ -47,3 +47,6 @@ export function formatPrice(amount: number, currency: string) {
 
 export const formatDate = (iso: string) =>
   new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(iso));
+
+/** The number people track a payment by: LP-6A58-8644-EBF8-4D63 for line 6a588644ebf84d63 (same as the receipt emails). */
+export const trackingNumber = (id: string) => 'LP-' + (id.toUpperCase().match(/.{1,4}/g) ?? []).join('-');

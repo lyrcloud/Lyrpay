@@ -27,7 +27,7 @@ def test_receipt_then_tracking_update(monkeypatch):
     pending = line(status="pending")
     result = receipts.handler({"Records": [record("INSERT", pending)]}, None)
     assert result == {"sent": 1}
-    assert sent[0][1] == "Withdrawal of $1.94 requested" and "lyrpay.com/?tx=abc" in sent[0][2]
+    assert sent[0][1] == "Withdrawal of $1.94 requested" and "lyrpay.com/?track=LP-ABC" in sent[0][2] and "Tracking number: LP-ABC" in sent[0][2]
     # Only a status change sends an update; another field changing doesn't
     receipts.handler({"Records": [record("MODIFY", {**pending, "attempt": 1}, pending)]}, None)
     assert len(sent) == 1

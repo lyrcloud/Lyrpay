@@ -189,13 +189,23 @@ def test_withdrawal_waits_while_stripe_is_short_of_funds(as_user, payouts_ready,
     assert result["status"] == "pending" and result["balances"] == {"USD": "40.00"}
 
     monkeypatch.setattr(ledger, "pending", lambda sub, kind, older_than_seconds=60: original(sub, kind, 0))
-    assert client.get("/api/me").json()["transactions"][0]["status"] == "pending"  # still short: waits again
+    waiting = client.get("/api/me").json()["transactions"][0]
+    assert (waiting["status"], waiting["waiting"]) == ("pending", "funds")  # still short: waits again, and says why
+    number = ledger.tracking_number(waiting["id"])
+    assert number.startswith("LP-") and len(number) == 22
+    assert client.get(f"/api/track/{number.lower().replace('-', ' ')}").json()["tx"]["waiting"] == "funds"  # tracking asks Stripe again
+    assert as_user(CAROL).get(f"/api/track/{number}").status_code == 404  # only its owner can track it
+    client = as_user(ALICE)
+    assert client.get("/api/track/LP-0000-0000-0000-0000").status_code == 404
 
-    # Once Stripe's funds clear, the next try (with a fresh key) pays it
+    # Once Stripe's funds clear, the next try (with a fresh key) pays it, and it no longer waits
     monkeypatch.setattr(stripe_client, "transfer_to", lambda *args: tries.append(args[4]) or {"id": "tr_later"})
-    me = client.get("/api/me").json()
-    assert me["transactions"][0]["status"] == "paid" and me["balances"] == {"USD": "40.00"}
-    assert tries == [0, 1, 2]
+    response = client.get(f"/api/track/{number}")
+    assert response.status_code == 200, response.text
+    tracked = response.json()["tx"]
+    assert tracked["status"] == "paid" and "waiting" not in tracked
+    assert client.get("/api/me").json()["balances"] == {"USD": "40.00"}
+    assert tries == [0, 1, 2, 3]
 
 
 def test_unanswered_withdrawal_is_settled_later(as_user, payouts_ready, monkeypatch):

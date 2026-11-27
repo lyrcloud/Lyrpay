@@ -15,6 +15,8 @@ export type Transaction = {
   currency: string;
   amount: string;
   status?: 'pending' | 'paid' | 'failed';
+  waiting?: 'funds';
+  rail?: string;
   counterparty?: string;
   note?: string;
   toCurrency?: string;
@@ -200,6 +202,7 @@ const post = <T>(path: string, body: unknown) => request<T>(path, { method: 'POS
 
 export const api = {
   config: () => request<{ cardPayments: boolean; fxFeeBps: number }>('/config'),
+  track: (number: string) => request<{ tx: Transaction }>(`/track/${encodeURIComponent(number)}`),
   me: () => request<{ profile: Profile; admin: boolean; business: Business | null; kyc: Kyc; frozen: boolean } & Statement>('/me'),
   updateProfile: (fields: Partial<Pick<Profile, 'currency' | 'country'>>) =>
     request<{ profile: Profile }>('/me', { method: 'PATCH', body: JSON.stringify(fields) }),

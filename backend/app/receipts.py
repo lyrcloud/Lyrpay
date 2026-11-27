@@ -78,10 +78,14 @@ def send_receipt(tx: dict, update: bool = False) -> bool:
     if tx.get("note"):
         details.append(f"Note: {tx['note']}")
     status = {"pending": "Processing", "failed": "Failed, nothing was taken", "paid": "Completed"}.get(tx.get("status") or "", "Completed")
-    details += [f"Status: {status}", f"Date: {str(tx['at'])[:19].replace('T', ' ')} UTC", f"Reference: {tx['id']}"]
+    number = ledger.tracking_number(tx["id"])
+    if tx.get("status") == "pending" and tx.get("waiting") == "funds":
+        status = "Processing: waiting for payout funds to clear, usually within 2 business days"
+    details += [f"Status: {status}", f"Date: {str(tx['at'])[:19].replace('T', ' ')} UTC", f"Tracking number: {number}"]
+    live = tx.get("status") == "pending"
     text, html = mail.render(
         subject, [f"Hi {mail.first_name(profile.get('name'))},", line, "\n".join(details)],
-        button=("See details and track it", f"{mail.SITE_URL}/?tx={tx['id']}"),
+        button=("Track it live" if live else "See details", f"{mail.SITE_URL}/?track={number}"),
         footer=mail._footer("You're getting this because money moved on your Lyrpay account.", to),
     )
     mail.send(to, subject, text, html, mail.unsubscribe_url(to))

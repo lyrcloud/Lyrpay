@@ -1,4 +1,5 @@
 import os
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -140,6 +141,34 @@ def transactions(sub: str, limit: int = 50) -> list[dict]:
         ScanIndexForward=False, Limit=limit,
     )["Items"]
     return [{k: v for k, v in item.items() if k not in ("pk", "sk", "queue")} for item in items]
+
+
+TRACKING = re.compile(r"^(?:LP)?([0-9A-F]{16})$")
+
+
+def tracking_number(tx_id: str) -> str:
+    """The number people track a payment by: LP-6A58-8644-EBF8-4D63 for line 6a588644ebf84d63."""
+    raw = tx_id.upper()
+    return "LP-" + "-".join(raw[i:i + 4] for i in range(0, len(raw), 4))
+
+
+def tx_id_from_tracking(number: str) -> str | None:
+    """The line id in a tracking number, however it was typed (dashes, spaces, case, with or without LP)."""
+    found = TRACKING.match(re.sub(r"[\s-]", "", str(number or "")).upper())
+    return found.group(1).lower() if found else None
+
+
+def find_tx(sub: str, tx_id: str) -> dict | None:
+    """One of the person's statement lines by id (newest first, so a recent payment is found fast)."""
+    start: dict = {}
+    while True:
+        page = table().query(KeyConditionExpression=Key("pk").eq(f"USER#{sub}") & Key("sk").begins_with("TX#"),
+                             FilterExpression=Attr("id").eq(tx_id), ScanIndexForward=False, **start)
+        for item in page["Items"]:
+            return item
+        if "LastEvaluatedKey" not in page:
+            return None
+        start = {"ExclusiveStartKey": page["LastEvaluatedKey"]}
 
 
 def _cutoff(older_than_seconds: int) -> str:
@@ -298,7 +327,7 @@ def finish_withdrawal(tx: dict, transfer_id: str):
     try:
         table().update_item(
             Key={"pk": tx["pk"], "sk": tx["sk"]},
-            UpdateExpression="SET #s = :s, #r = :r REMOVE queue",
+            UpdateExpression="SET #s = :s, #r = :r REMOVE queue, waiting",
             ConditionExpression="#s = :pending",
             ExpressionAttributeNames={"#s": "status", "#r": "reference"},
             ExpressionAttributeValues={":s": "paid", ":r": transfer_id, ":pending": "pending"},
@@ -312,18 +341,21 @@ def finish_withdrawal(tx: dict, transfer_id: str):
 def note_transfer(tx: dict, transfer_id: str):
     """Record the bank transfer made for a withdrawal that is still on its way."""
     table().update_item(
-        Key={"pk": tx["pk"], "sk": tx["sk"]}, UpdateExpression="SET #r = :r",
+        Key={"pk": tx["pk"], "sk": tx["sk"]}, UpdateExpression="SET #r = :r REMOVE waiting",
         ExpressionAttributeNames={"#r": "reference"}, ExpressionAttributeValues={":r": transfer_id},
     )
     tx["reference"] = transfer_id
+    tx.pop("waiting", None)
 
 
 def note_attempt(tx: dict):
-    """Count a withdrawal try Stripe couldn't fund, so the next try uses a fresh idempotency key."""
+    """Count a withdrawal try Stripe couldn't fund, so the next try uses a fresh idempotency key, and note that it is
+    waiting for Lyrpay's payout funds to clear (the tracker shows it)."""
     tx["attempt"] = int(tx.get("attempt", 0)) + 1
+    tx["waiting"] = "funds"
     table().update_item(
-        Key={"pk": tx["pk"], "sk": tx["sk"]}, UpdateExpression="SET attempt = :a",
-        ExpressionAttributeValues={":a": tx["attempt"]},
+        Key={"pk": tx["pk"], "sk": tx["sk"]}, UpdateExpression="SET attempt = :a, waiting = :w",
+        ExpressionAttributeValues={":a": tx["attempt"], ":w": "funds"},
     )
 
 
@@ -331,7 +363,7 @@ def _settle(pk: str, sk: str, status: str) -> dict:
     """Take a pending line off the queue with its outcome, only if it is still pending."""
     return {"Update": {
         "TableName": TABLE_NAME, "Key": {"pk": pk, "sk": sk},
-        "UpdateExpression": "SET #s = :s REMOVE queue",
+        "UpdateExpression": "SET #s = :s REMOVE queue, waiting",
         "ConditionExpression": "#s = :pending",
         "ExpressionAttributeNames": {"#s": "status"},
         "ExpressionAttributeValues": {":s": status, ":pending": "pending"},

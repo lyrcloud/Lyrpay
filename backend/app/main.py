@@ -1082,6 +1082,26 @@ def fund_wise(tx: dict, transfer_id: int) -> str:
             return "incoming_payment_waiting"
 
 
+@app.get("/api/track/{number}")
+def track(number: str, user: User = Depends(checked_user)):
+    """One of the person's payments by its tracking number (LP-XXXX-XXXX-XXXX-XXXX, from the app or a receipt email).
+    A withdrawal or bank top-up still on its way is checked with its provider first, so each look is live."""
+    tx_id = ledger.tx_id_from_tracking(number)
+    tx = ledger.find_tx(user.sub, tx_id) if tx_id else None
+    if not tx:
+        raise HTTPException(status_code=404, detail="No payment of yours has that tracking number.")
+    if tx.get("status") == "pending" and tx.get("queue"):
+        try:
+            if tx["kind"] == "withdraw":
+                send_withdrawal(tx, ledger.ensure_profile(user))
+            elif tx["kind"] == "topup":
+                check_topup(tx)
+        except Exception:
+            logger.exception("Tracking %s: checking with the provider failed", tx["id"])
+        tx = ledger.find_tx(user.sub, tx["id"]) or tx
+    return {"tx": {k: v for k, v in tx.items() if k not in ("pk", "sk", "queue")}}
+
+
 def settle_withdrawals(sub: str, profile: dict):
     """Finish withdrawals still pending, each time the person opens their wallet."""
     for tx in ledger.pending(sub, "withdraw"):
