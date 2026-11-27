@@ -317,6 +317,15 @@ def note_transfer(tx: dict, transfer_id: str):
     tx["reference"] = transfer_id
 
 
+def note_attempt(tx: dict):
+    """Count a withdrawal try Stripe couldn't fund, so the next try uses a fresh idempotency key."""
+    tx["attempt"] = int(tx.get("attempt", 0)) + 1
+    table().update_item(
+        Key={"pk": tx["pk"], "sk": tx["sk"]}, UpdateExpression="SET attempt = :a",
+        ExpressionAttributeValues={":a": tx["attempt"]},
+    )
+
+
 def _settle(pk: str, sk: str, status: str) -> dict:
     """Take a pending line off the queue with its outcome, only if it is still pending."""
     return {"Update": {

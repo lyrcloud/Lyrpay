@@ -920,11 +920,17 @@ def send_withdrawal(tx: dict, profile: dict) -> str:
         return "pending"
     try:
         transfer = stripe_client.find_transfer(account_id, tx["id"]) or stripe_client.transfer_to(
-            account_id, -tx["amount"], tx["currency"], tx["id"],
+            account_id, -tx["amount"], tx["currency"], tx["id"], int(tx.get("attempt", 0)),
         )
     except stripe_client.StripeError as error:
         if not error.definitive:
             return "pending"
+        if error.code == "balance_insufficient":
+            # Lyrpay's Stripe balance is still clearing recent top-ups: the withdrawal waits and the sweep sends it later
+            logger.warning("Withdrawal %s waits: Stripe's available balance is too low (%s)", tx["id"], error)
+            ledger.note_attempt(tx)
+            return "pending"
+        logger.warning("Withdrawal %s refused by Stripe: %s", tx["id"], error)
         ledger.fail_withdrawal(tx)
         return "failed"
     ledger.finish_withdrawal(tx, transfer["id"])

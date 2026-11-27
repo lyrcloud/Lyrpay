@@ -108,7 +108,8 @@ export default function Dashboard({ onSignedOut }: { onSignedOut: () => void }) 
 
   // Everything held, valued in the home currency at today's rates
   const total = Object.entries(statement.balances).reduce(
-    (sum, [code, amount]) => sum + (rates.rates[code] ? Number(amount) / rates.rates[code] : 0), 0,
+    // The home currency counts as is, so the total is right even before (or without) the rates
+    (sum, [code, amount]) => sum + (code === home ? Number(amount) : rates.rates[code] ? Number(amount) / rates.rates[code] : 0), 0,
   );
 
   const shared = { currencies, balances: statement.balances, home, onStatement: setStatement, onNotice: setNotice };

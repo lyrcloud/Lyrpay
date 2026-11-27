@@ -16,9 +16,10 @@ _key: str | None = None
 class StripeError(RuntimeError):
     """definitive: Stripe answered and refused (4xx). Otherwise the outcome is unknown and the call may have worked."""
 
-    def __init__(self, message: str, definitive: bool):
+    def __init__(self, message: str, definitive: bool, code: str = ""):
         super().__init__(message)
         self.definitive = definitive
+        self.code = code  # Stripe's error code, like balance_insufficient
 
 
 def secret_key() -> str | None:
@@ -54,8 +55,9 @@ def _request(
         global _key
         _key = None  # rejected key: read the secret again next time, so a corrected one is picked up
     if response.status_code >= 400:
-        message = body.get("error", {}).get("message", "Stripe declined the request.")
-        raise StripeError(message, definitive=response.status_code < 500)
+        error = body.get("error", {})
+        raise StripeError(error.get("message", "Stripe declined the request."), definitive=response.status_code < 500,
+                          code=error.get("code", ""))
     return body
 
 
@@ -170,13 +172,14 @@ def onboarding_link(account_id: str, origin: str) -> str:
     })["url"]
 
 
-def transfer_to(account_id: str, amount: Decimal, currency: str, reference: str) -> dict:
+def transfer_to(account_id: str, amount: Decimal, currency: str, reference: str, attempt: int = 0) -> dict:
+    """attempt: a fresh key for each try after Stripe was short of funds, since Stripe replays a key's answer for 24 hours."""
     return _request("POST", "/transfers", {
         "amount": stripe_amount(amount, currency),
         "currency": currency.lower(),
         "destination": account_id,
         "metadata[lyrpay_tx]": reference,
-    }, idempotency_key=f"lyrpay-withdraw-{reference}")
+    }, idempotency_key=f"lyrpay-withdraw-{reference}" + (f"-{attempt}" if attempt else ""))
 
 
 def find_transfer(account_id: str, reference: str) -> dict | None:

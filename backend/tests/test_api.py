@@ -156,7 +156,7 @@ def test_withdraw_after_onboarding(as_user, payouts_ready, monkeypatch):
     result = client.post("/api/withdraw", json={"amount": "10"}).json()
     assert result["balances"] == {"USD": "40.00"}
     assert result["transactions"][0]["status"] == "paid"
-    assert sent == [("acct_1", Decimal("10"), "USD", result["transactions"][0]["id"])]
+    assert sent == [("acct_1", Decimal("10"), "USD", result["transactions"][0]["id"], 0)]
     assert client.post("/api/withdraw", json={"amount": "40.01"}).status_code == 409
 
 
@@ -172,6 +172,30 @@ def test_refused_withdrawal_restores_balance(as_user, payouts_ready, monkeypatch
     me = client.get("/api/me").json()
     assert me["balances"] == {"USD": "50.00"}
     assert me["transactions"][0]["status"] == "failed"
+
+
+def test_withdrawal_waits_while_stripe_is_short_of_funds(as_user, payouts_ready, monkeypatch):
+    tries = []
+
+    def short(account, amount, currency, reference, attempt=0):
+        tries.append(attempt)
+        raise stripe_client.StripeError("Insufficient funds in Stripe account.", definitive=True, code="balance_insufficient")
+    monkeypatch.setattr(stripe_client, "transfer_to", short)
+    client = as_user(ALICE)
+    client.post("/api/topup/confirm", json={"sessionId": "cs_test_w5"})
+    client.patch("/api/me", json={"country": "US"})
+    client.post("/api/payouts/onboard")
+    result = client.post("/api/withdraw", json={"amount": "10"}).json()
+    assert result["status"] == "pending" and result["balances"] == {"USD": "40.00"}
+
+    monkeypatch.setattr(ledger, "pending", lambda sub, kind, older_than_seconds=60: original(sub, kind, 0))
+    assert client.get("/api/me").json()["transactions"][0]["status"] == "pending"  # still short: waits again
+
+    # Once Stripe's funds clear, the next try (with a fresh key) pays it
+    monkeypatch.setattr(stripe_client, "transfer_to", lambda *args: tries.append(args[4]) or {"id": "tr_later"})
+    me = client.get("/api/me").json()
+    assert me["transactions"][0]["status"] == "paid" and me["balances"] == {"USD": "40.00"}
+    assert tries == [0, 1, 2]
 
 
 def test_unanswered_withdrawal_is_settled_later(as_user, payouts_ready, monkeypatch):
