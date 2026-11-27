@@ -974,6 +974,8 @@ def plaid_call(call, *args, **kwargs):
 def send_withdrawal(tx: dict, profile: dict) -> str:
     """Make sure the transfer for a pending withdrawal exists and record the outcome:
     'paid', 'failed' (balance restored) or 'pending' (the answer is still unknown, or the bank hasn't got it yet)."""
+    if not ledger.claim_check(tx):
+        return "pending"  # another request is asking the provider about it right now
     if tx.get("rail") == "plaid":
         return send_plaid_withdrawal(tx, profile)
     if tx.get("rail") == "wise":
@@ -1100,7 +1102,7 @@ def track(number: str, user: User = Depends(checked_user)):
             logger.exception("Tracking %s: checking with the provider failed", tx["id"])
         tx = ledger.find_tx(user.sub, tx["id"]) or tx
     # Shaped like a statement line (amounts as text), since the wallet shows it with the same code
-    return {"tx": {k: (str(v) if isinstance(v, Decimal) else v) for k, v in tx.items() if k not in ("pk", "sk", "queue")}}
+    return {"tx": {k: (str(v) if isinstance(v, Decimal) else v) for k, v in tx.items() if k not in ledger.INTERNAL}}
 
 
 def settle_withdrawals(sub: str, profile: dict):

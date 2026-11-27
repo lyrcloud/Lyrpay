@@ -56,8 +56,12 @@ def _request(
         _key = None  # rejected key: read the secret again next time, so a corrected one is picked up
     if response.status_code >= 400:
         error = body.get("error", {})
-        raise StripeError(error.get("message", "Stripe declined the request."), definitive=response.status_code < 500,
-                          code=error.get("code", ""))
+        code = error.get("code", "")
+        # A clash with a request still in flight (409, idempotency_key_in_use), a lock timeout or a rate limit (429) says
+        # nothing about whether the request would work: the outcome is unknown, so it must be asked again, never written off
+        busy = response.status_code in (409, 429) or code in ("idempotency_key_in_use", "lock_timeout", "rate_limit")
+        raise StripeError(error.get("message", "Stripe declined the request."),
+                          definitive=response.status_code < 500 and not busy, code=code)
     return body
 
 

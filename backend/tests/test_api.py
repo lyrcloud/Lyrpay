@@ -46,6 +46,7 @@ def aws(monkeypatch):
             BillingMode="PAY_PER_REQUEST",
         )
         monkeypatch.setattr(ledger, "_table", None)
+        monkeypatch.setattr(ledger, "CHECK_LOCK_SECONDS", 0)  # tests ask again at once; the lock has its own test
         monkeypatch.setattr(mail, "send", lambda *args, **kwargs: None)
         monkeypatch.setattr(rates, "usd_rates", lambda: {"updated": "today", "rates": {"USD": 1, "EUR": 0.9, "JPY": 150}})
         yield
@@ -1025,3 +1026,41 @@ def test_waitlist_is_emailed_once_when_cards_go_live(as_user, monkeypatch):
     assert sorted(sent) == sorted([(ALICE.email, "Your Lyrpay Visa card is ready to get"), (CAROL.email, "Lyrpay cards have launched")])
     assert lambda_handler.handler({"warm": True}, None)["waitlist"] == {"done": True}
     assert len(sent) == 2
+
+
+def test_overlapping_checks_never_write_off_a_withdrawal(as_user, payouts_ready, monkeypatch):
+    """The tracking page, the wallet and the sweep may all ask about one withdrawal at once. Stripe answers a clash with
+    "another request is using this idempotency key" (409): that is no refusal, so the withdrawal must stay pending."""
+    calls = []
+
+    def clash(account, amount, currency, reference, attempt=0):
+        calls.append(attempt)
+        raise stripe_client.StripeError("There is currently another in-progress request using this Idempotent Key",
+                                        definitive=False, code="idempotency_key_in_use")
+    monkeypatch.setattr(stripe_client, "transfer_to", clash)
+    client = as_user(ALICE)
+    client.post("/api/topup/confirm", json={"sessionId": "cs_test_w9"})
+    client.patch("/api/me", json={"country": "US"})
+    client.post("/api/payouts/onboard")
+    result = client.post("/api/withdraw", json={"amount": "10"}).json()
+    assert result["status"] == "pending" and result["balances"] == {"USD": "40.00"}
+    number = ledger.tracking_number(result["transactions"][0]["id"])
+    assert client.get(f"/api/track/{number}").json()["tx"]["status"] == "pending"
+
+    # With the lock on, a second look moments later doesn't ask Stripe again
+    monkeypatch.setattr(ledger, "CHECK_LOCK_SECONDS", 30)
+    asked = len(calls)
+    assert client.get(f"/api/track/{number}").json()["tx"]["status"] == "pending"
+    assert len(calls) == asked
+    assert client.get("/api/me").json()["balances"] == {"USD": "40.00"}
+
+
+def test_stripe_clash_and_rate_limit_are_not_refusals(monkeypatch):
+    import httpx
+    for status, code in ((409, "idempotency_key_in_use"), (429, "rate_limit"), (400, "balance_insufficient")):
+        monkeypatch.setattr(stripe_client, "secret_key", lambda: "sk_test")
+        monkeypatch.setattr(httpx, "request", lambda *a, status=status, code=code, **k: httpx.Response(status, json={"error": {"message": "x", "code": code}}))
+        try:
+            stripe_client._request("POST", "/transfers", {})
+        except stripe_client.StripeError as error:
+            assert error.definitive is (status == 400), (status, code)

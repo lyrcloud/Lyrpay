@@ -135,12 +135,16 @@ def balances(sub: str) -> dict[str, Decimal]:
     return {item["currency"]: item["amount"] for item in items if item["amount"] != 0}
 
 
+# Bookkeeping fields on a statement line that the person never sees
+INTERNAL = ("pk", "sk", "queue", "checking")
+
+
 def transactions(sub: str, limit: int = 50) -> list[dict]:
     items = table().query(
         KeyConditionExpression=Key("pk").eq(f"USER#{sub}") & Key("sk").begins_with("TX#"),
         ScanIndexForward=False, Limit=limit,
     )["Items"]
-    return [{k: v for k, v in item.items() if k not in ("pk", "sk", "queue")} for item in items]
+    return [{k: v for k, v in item.items() if k not in INTERNAL} for item in items]
 
 
 TRACKING = re.compile(r"^(?:LP)?([0-9A-F]{16})$")
@@ -346,6 +350,27 @@ def note_transfer(tx: dict, transfer_id: str):
     )
     tx["reference"] = transfer_id
     tx.pop("waiting", None)
+
+
+# One provider check per withdrawal at a time: the tracking page, the wallet and the sweep can all ask at once
+CHECK_LOCK_SECONDS = int(os.getenv("CHECK_LOCK_SECONDS", "20"))
+
+
+def claim_check(tx: dict) -> bool:
+    """Take the right to ask the provider about this pending line now; False if another check began moments ago."""
+    now = datetime.now(timezone.utc)
+    try:
+        table().update_item(
+            Key={"pk": tx["pk"], "sk": tx["sk"]}, UpdateExpression="SET checking = :now",
+            ConditionExpression="attribute_not_exists(checking) OR checking <= :cutoff",
+            ExpressionAttributeValues={":now": now.isoformat(timespec="milliseconds"),
+                                       ":cutoff": (now - timedelta(seconds=CHECK_LOCK_SECONDS)).isoformat(timespec="milliseconds")},
+        )
+        return True
+    except ClientError as error:
+        if error.response["Error"]["Code"] == "ConditionalCheckFailedException":
+            return False
+        raise
 
 
 def note_attempt(tx: dict):
