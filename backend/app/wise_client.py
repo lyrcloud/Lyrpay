@@ -174,9 +174,11 @@ def create_recipient(*, currency: str, kind: str, holder: str, details: dict) ->
 
 
 # Some currencies Wise lists in general aren't open to Lyrpay's business account (BDT, for one: Wise answers
-# error.route.not.supported). Each currency is asked about once a day, by a quote with no recipient.
+# error.route.not.supported). Each currency is asked about by a quote with no recipient: an open one is remembered
+# for a day, a closed one for an hour, so a route Wise switches on shows up soon.
 ROUTE_NOT_SUPPORTED = "error.route.not.supported"
 ROUTE_KEEP_FOR = 86400
+ROUTE_CLOSED_FOR = 3600
 _routes: dict[str, tuple[bool, float]] = {}
 
 
@@ -191,7 +193,7 @@ def route_open(target: str) -> bool:
     if target == source():
         return True
     known = _routes.get(target)
-    if known and time.monotonic() - known[1] < ROUTE_KEEP_FOR:
+    if known and time.monotonic() - known[1] < (ROUTE_KEEP_FOR if known[0] else ROUTE_CLOSED_FOR):
         return known[0]
     try:
         _request("POST", f"/v3/profiles/{profile_id()}/quotes",
