@@ -950,10 +950,12 @@ def stripe_call(call, *args, **kwargs):
 
 
 def plaid_payouts(email: str) -> bool:
-    """Bank payouts go through Plaid once its keys are set. Sandbox keys only for admins, who test with Plaid's
-    pretend banks: nobody else's real balance is ever sent to one."""
+    """Bank payouts go through Plaid once its production keys are set. A sandbox payout takes real ledger money to one
+    of Plaid's pretend banks, where it never arrives, so sandbox keys offer payouts to admins only when the lyrpay/plaid
+    secret also says "sandbox_payouts": true (or PLAID_SANDBOX_PAYOUTS=1), for a deliberate test."""
     current = plaid_client.env()
-    return current == "production" or (current == "sandbox" and bool(email) and email in ADMIN_EMAILS)
+    testing = os.getenv("PLAID_SANDBOX_PAYOUTS") == "1" or bool((plaid_client.keys() or {}).get("sandbox_payouts"))
+    return current == "production" or (current == "sandbox" and testing and bool(email) and email in ADMIN_EMAILS)
 
 
 def plaid_bank(profile: dict) -> dict | None:

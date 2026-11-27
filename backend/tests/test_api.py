@@ -653,8 +653,9 @@ ADMIN = User(sub="admin", email="lyrclouds@gmail.com", phone="", name="Ada Admin
 
 @pytest.fixture
 def plaid(monkeypatch):
-    """Plaid with sandbox keys, a person who finished the Hosted Link page, and a payout Plaid has taken."""
-    monkeypatch.setattr(plaid_client, "_keys", {"client_id": "c", "secret": "s", "env": "sandbox"})
+    """Plaid with sandbox keys switched on for a deliberate admin test, a person who finished the Hosted Link page,
+    and a payout Plaid has taken."""
+    monkeypatch.setattr(plaid_client, "_keys", {"client_id": "c", "secret": "s", "env": "sandbox", "sandbox_payouts": True})
     monkeypatch.setattr(stripe_client, "get_checkout", lambda _: paid_session("admin"))
     monkeypatch.setattr(plaid_client, "hosted_link", lambda sub, redirect: {"link_token": "link-1", "hosted_link_url": "https://secure.plaid.com/hl/1"})
     monkeypatch.setattr(plaid_client, "linked_account", lambda token: {"public_token": "public-1", "account_id": "acc-1", "label": "Chase ••0000"} if token == "link-1" else None)
@@ -678,9 +679,12 @@ def linked(client):
     return client
 
 
-def test_sandbox_plaid_is_only_for_admins(as_user, payouts_ready, plaid):
+def test_sandbox_plaid_is_only_for_admins(as_user, payouts_ready, plaid, monkeypatch):
     assert as_user(ALICE).get("/api/payouts").json()["provider"] == "stripe"
     assert as_user(ADMIN).get("/api/payouts").json() == {"status": "none", "currency": "USD", "provider": "plaid", "bank": "", "test": True, "wise": None}
+    # Sandbox keys alone offer nobody payouts, admins included: a test payout takes real ledger money to a pretend bank
+    monkeypatch.setitem(plaid_client._keys, "sandbox_payouts", False)
+    assert as_user(ADMIN).get("/api/payouts").json()["provider"] == "stripe"
 
 
 def test_plaid_withdrawal_is_sent_once_and_settled_when_posted(as_user, plaid, monkeypatch):
