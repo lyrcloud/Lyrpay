@@ -159,3 +159,19 @@ def test_quote_says_why_wise_cannot_pay(monkeypatch):
     with pytest.raises(wise_client.WiseError, match="paused while Lyrpay adds funds") as raised:
         wise_client.quote(target="USD", source_amount=Decimal("50"))
     assert raised.value.code == "unfunded"
+
+
+def test_currencies_wise_wont_send_are_explained(as_user, monkeypatch):
+    monkeypatch.setattr(wise_client, "env", lambda: "live")
+    monkeypatch.setattr(wise_client, "source", lambda: "USD")
+    def refuse(method, path, body=None, params=None):
+        if "/quotes" in path and (body or {}).get("targetCurrency") == "BDT":
+            raise wise_client.WiseError("Sorry, you can't send between these currencies right now.", True, code="error.route.not.supported")
+        return {"id": "q", "payOut": "BANK_TRANSFER", "paymentOptions": []} if "/quotes" in path else []
+    monkeypatch.setattr(wise_client, "_request", refuse)
+    monkeypatch.setattr(wise_client, "profile_id", lambda: 1)
+    wise_client._routes.clear()
+    response = as_user(BOB).post("/api/wise/requirements", json={"currency": "BDT"})
+    assert response.status_code == 409 and "can't pay out in BDT" in response.json()["detail"]
+    with pytest.raises(wise_client.WiseError, match="can't pay out in BDT"):
+        wise_client.quote(target="BDT", source_amount=Decimal("10"))

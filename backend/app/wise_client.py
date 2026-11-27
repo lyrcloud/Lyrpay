@@ -173,13 +173,50 @@ def create_recipient(*, currency: str, kind: str, holder: str, details: dict) ->
     })
 
 
+# Some currencies Wise lists in general aren't open to Lyrpay's business account (BDT, for one: Wise answers
+# error.route.not.supported). Each currency is asked about once a day, by a quote with no recipient.
+ROUTE_NOT_SUPPORTED = "error.route.not.supported"
+ROUTE_KEEP_FOR = 86400
+_routes: dict[str, tuple[bool, float]] = {}
+
+
+def route_message(target: str) -> str:
+    return (f"Wise can't pay out in {target.upper()} from Lyrpay yet. Withdraw in {source()} instead: Wise sends it "
+            f"to banks in most countries, including by SWIFT.")
+
+
+def route_open(target: str) -> bool:
+    """Whether Wise will send this currency from Lyrpay's account. Unknown (Wise didn't answer) counts as open."""
+    target = target.upper()
+    if target == source():
+        return True
+    known = _routes.get(target)
+    if known and time.monotonic() - known[1] < ROUTE_KEEP_FOR:
+        return known[0]
+    try:
+        _request("POST", f"/v3/profiles/{profile_id()}/quotes",
+                 {"sourceCurrency": source(), "targetCurrency": target, "sourceAmount": 100})
+        _routes[target] = (True, time.monotonic())
+    except WiseError as error:
+        if error.code != ROUTE_NOT_SUPPORTED:
+            return True
+        _routes[target] = (False, time.monotonic())
+    return _routes[target][0]
+
+
 def quote(*, target: str, source_amount: Decimal, recipient: int | None = None) -> dict:
     """What a payout costs: Wise's fee comes out of source_amount (in the source currency) and the rest arrives.
     Returns {id, fee, receive, rate} for a payout from the Wise balance."""
     body = {"sourceCurrency": source(), "targetCurrency": target.upper(), "sourceAmount": float(source_amount)}
     if recipient:
         body["targetAccount"] = recipient
-    found = _request("POST", f"/v3/profiles/{profile_id()}/quotes", body)
+    try:
+        found = _request("POST", f"/v3/profiles/{profile_id()}/quotes", body)
+    except WiseError as error:
+        if error.code == ROUTE_NOT_SUPPORTED:
+            _routes[target.upper()] = (False, time.monotonic())
+            raise WiseError(route_message(target), definitive=True, code=ROUTE_NOT_SUPPORTED)
+        raise
     balance = [o for o in found.get("paymentOptions", []) if o.get("payIn") == "BALANCE"]
     options = [o for o in balance if not o.get("disabled")]
     option = next((o for o in options if o.get("payOut") == found.get("payOut")), options[0] if options else None)

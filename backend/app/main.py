@@ -1288,6 +1288,9 @@ def wise_requirements(body: WiseForm, user: User = Depends(checked_user)):
     if not wise_payouts(user.email):
         raise HTTPException(status_code=503, detail="Wise withdrawals aren't switched on yet.")
     currency = currency_code(body.currency)
+    # Before asking for bank details, make sure Wise will pay out in this currency at all
+    if not wise_client.route_open(currency):
+        raise HTTPException(status_code=409, detail=wise_client.route_message(currency))
     return {"currency": currency, "types": wise_call(wise_client.requirements, currency, Decimal(100), body.details or None)}
 
 
