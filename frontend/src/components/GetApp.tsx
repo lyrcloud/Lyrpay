@@ -20,7 +20,7 @@ export default function GetApp() {
           ) : (
             <>
               <a className="button primary" href={APK_URL} download="lyrpay.apk">Download for Android</a>
-              <p className="muted small" data-app-meta>Version 2.0 · 4.6 MB · Android 7.0 or newer</p>
+              <p className="muted small" data-app-meta>Version 2.0 · 3.3 MB · Android 7.0 or newer</p>
             </>
           )}
           <h2>How to install</h2>
