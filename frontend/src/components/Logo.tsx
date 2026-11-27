@@ -38,6 +38,8 @@ export function SiteFooter() {
     <footer className="site-footer">
       <span className="site-footer-brand"><LogoMark size={16} />© {new Date().getFullYear()} Lyrpay</span>
       {!/LyrpayApp/.test(navigator.userAgent) && <a href="/app">Get the Android app</a>}
+      <a href="/terms.html">Terms</a>
+      <a href="/privacy.html">Privacy</a>
       <span>Powered by Lyrcloud</span>
     </footer>
   );
