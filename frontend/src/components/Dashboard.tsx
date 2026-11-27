@@ -15,6 +15,9 @@ import Verify from './Verify';
 
 type Tab = 'wallet' | 'cards' | 'rewards' | 'business' | 'markets' | 'connect' | 'admin';
 const TABS: Tab[] = ['wallet', 'cards', 'rewards', 'business', 'markets', 'connect', 'admin'];
+const TAB_ICON: Record<Tab, string> = {
+  wallet: '👛', cards: '💳', rewards: '🎁', business: '🏢', markets: '📈', connect: '🔗', admin: '',
+};
 const TAB_LABEL: Record<Tab, string> = {
   wallet: 'Wallet', cards: 'Card', rewards: 'Rewards', business: 'Business', markets: 'Markets', connect: 'Connections', admin: '★ Admin',
 };
@@ -127,7 +130,7 @@ export default function Dashboard({ onSignedOut }: { onSignedOut: () => void }) 
         <nav className="nav" aria-label="Sections">
           {TABS.filter(t => t !== 'admin' || admin).map(t => (
             <button key={t} aria-current={tab === t} onClick={() => setTab(t)} className={t === 'admin' ? 'nav-admin' : ''}>
-              {TAB_LABEL[t]}
+              {TAB_ICON[t] && <span className="nav-icon" aria-hidden="true">{TAB_ICON[t]}</span>}{TAB_LABEL[t]}
             </button>
           ))}
         </nav>
@@ -139,13 +142,13 @@ export default function Dashboard({ onSignedOut }: { onSignedOut: () => void }) 
       </header>
       <Ticker />
 
-      <main className={`main${tab === 'admin' ? ' main-wide' : ''}`}>
+      <main className={`main${tab === 'admin' ? ' main-wide' : ''}`} key={tab}>
         {notice && <div className="toast" role="status">{notice}<button className="link" onClick={() => setNotice('')}>Dismiss</button></div>}
         {error && <div className="toast toast-error" role="alert">{error}<button className="link" onClick={() => setError('')}>Dismiss</button></div>}
 
         {tab === 'wallet' && (
           <div className="grid">
-            <section className="card hero glow">
+            <section className="card hero hero-wallet glow">
               <div className="hero-head">
                 <span className="muted">Total balance</span>
                 <div className="home-pickers">
@@ -158,7 +161,7 @@ export default function Dashboard({ onSignedOut }: { onSignedOut: () => void }) 
               <p className="total">{profile ? formatMoney(total, home) : '…'}</p>
               <ul className="balances">
                 {Object.entries(statement.balances).map(([code, amount]) => (
-                  <li key={code}>
+                  <li key={code} style={{ ['--hue' as string]: String([...code].reduce((h, c) => h * 31 + c.charCodeAt(0), 7) % 360) }}>
                     <span className="code">{code}</span>
                     <span className="muted">{currencyName(code)}</span>
                     <strong>{formatMoney(amount, code)}</strong>
@@ -172,7 +175,7 @@ export default function Dashboard({ onSignedOut }: { onSignedOut: () => void }) 
               <div className="tabs" role="tablist">
                 {(['add', 'send', 'convert', 'withdraw'] as Action[]).map(a => (
                   <button key={a} role="tab" aria-selected={action === a} onClick={() => setAction(a)}>
-                    {{ add: 'Add', send: 'Send', convert: 'Convert', withdraw: 'Withdraw' }[a]}
+                    <span aria-hidden="true">{{ add: '＋', send: '↗', convert: '⇄', withdraw: '🏦' }[a]}</span>{{ add: 'Add', send: 'Send', convert: 'Convert', withdraw: 'Withdraw' }[a]}
                   </button>
                 ))}
               </div>
@@ -184,7 +187,7 @@ export default function Dashboard({ onSignedOut }: { onSignedOut: () => void }) 
 
             <Verify onNotice={setNotice} />
 
-            <section className="card span-2">
+            <section className="card span-2 activity-card">
               <h2>Activity</h2>
               <TrackPayment initial={trackNumber} />
               <Activity transactions={statement.transactions} openId={openTx} />

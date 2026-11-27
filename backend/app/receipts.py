@@ -83,9 +83,11 @@ def send_receipt(tx: dict, update: bool = False) -> bool:
         status = "Processing: waiting for payout funds to clear, usually within 2 business days"
     details += [f"Status: {status}", f"Date: {str(tx['at'])[:19].replace('T', ' ')} UTC", f"Tracking number: {number}"]
     live = tx.get("status") == "pending"
+    track_url = f"{mail.SITE_URL}/track/{number}"
     text, html = mail.render(
         subject, [f"Hi {mail.first_name(profile.get('name'))},", line, "\n".join(details)],
-        button=("Track it live" if live else "See details", f"{mail.SITE_URL}/?track={number}"),
+        highlight=("Tracking number", number, track_url),
+        button=("Track it live" if live else "See details", track_url),
         footer=mail._footer("You're getting this because money moved on your Lyrpay account.", to),
     )
     mail.send(to, subject, text, html, mail.unsubscribe_url(to))

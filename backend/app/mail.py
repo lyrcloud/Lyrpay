@@ -112,9 +112,21 @@ def unsubscribe_url(email: str) -> str:
 
 # ── Rendering and sending ─────────────────────────────────────────────────────
 
-def render(heading: str, paragraphs: list[str], button: tuple[str, str] | None = None, footer: str = "") -> tuple[str, str]:
-    """(text, html) for a simple branded email; links in paragraphs and the footer are made clickable."""
+def render(heading: str, paragraphs: list[str], button: tuple[str, str] | None = None, footer: str = "",
+           highlight: tuple[str, str, str] | None = None) -> tuple[str, str]:
+    """(text, html) for a simple branded email; links in paragraphs and the footer are made clickable.
+    highlight: (label, value, url), shown as a coloured box before the paragraphs, the whole box a link."""
     text, body = [heading, ""], []
+    if highlight:
+        label, value, url = highlight
+        text += [f"{label}: {value}", url, ""]
+        body.append(
+            f'<a href="{html_lib.escape(url)}" style="display:block;text-decoration:none;margin:0 0 18px;padding:14px 18px;'
+            'border-radius:12px;background:linear-gradient(135deg,#7c5cff,#5b5bf6 55%,#18c8e8);background-color:#5b5bf6;color:#fff">'
+            f'<span style="display:block;font-size:12px;letter-spacing:.08em;text-transform:uppercase;opacity:.85">{html_lib.escape(label)}</span>'
+            f'<span style="display:block;font-size:22px;font-weight:800;letter-spacing:.04em;font-family:ui-monospace,Menlo,monospace">'
+            f'{html_lib.escape(value)}</span>'
+            '<span style="display:block;font-size:13px;margin-top:4px;opacity:.9">Tap to track it live &rarr;</span></a>')
     for paragraph in paragraphs:
         text += [paragraph, ""]
         linked = URL_RE.sub(rf'<a href="\1" style="color:{ACCENT}">\1</a>', html_lib.escape(paragraph))

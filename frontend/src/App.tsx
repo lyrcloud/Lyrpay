@@ -3,6 +3,7 @@ import AuthPage from './components/AuthPage';
 import GetApp from './components/GetApp';
 import Dashboard from './components/Dashboard';
 import PayPage from './components/PayPage';
+import TrackPage from './components/TrackPage';
 import { api, type CheckoutSummary } from './lib/api';
 import { completeHostedSignIn, currentUser, signInWithGoogle, triggerMessage } from './lib/auth';
 import { captureReferral } from './lib/referral';
@@ -18,6 +19,21 @@ try {
 } catch {
   // storage unavailable: the link still works when already signed in
 }
+// A receipt's tracking link (lyrpay.com/track/LP-…) is kept through sign-in the same way
+const TRACK_KEY = 'lyrpay_track';
+const trackFromPath = decodeURIComponent(location.pathname.match(/^\/track\/([A-Za-z0-9 -]{16,30})\/?$/)?.[1] ?? '');
+try {
+  if (trackFromPath) sessionStorage.setItem(TRACK_KEY, trackFromPath);
+} catch {
+  // storage unavailable: the link still works when already signed in
+}
+const pendingTrack = () => {
+  try {
+    return trackFromPath || sessionStorage.getItem(TRACK_KEY) || '';
+  } catch {
+    return trackFromPath;
+  }
+};
 const pendingPay = () => {
   try {
     return payFromPath ?? sessionStorage.getItem(PAY_KEY) ?? '';
@@ -32,6 +48,12 @@ export default function App() {
   const onCallback = location.pathname === '/auth/callback';
   const [payId, setPayId] = useState(pendingPay);
   const [paySummary, setPaySummary] = useState<CheckoutSummary | null>(null);
+  const [track, setTrack] = useState(pendingTrack);
+  const leaveTrack = () => {
+    try { sessionStorage.removeItem(TRACK_KEY); } catch { /* storage unavailable */ }
+    history.replaceState(null, '', '/');
+    setTrack('');
+  };
   useEffect(() => {
     if (payId && !signedIn) api.checkoutSummary(payId).then(setPaySummary).catch(() => setPaySummary(null));
   }, [payId, signedIn]);
@@ -77,5 +99,6 @@ export default function App() {
     );
   }
   if (payId) return <PayPage id={payId} onDone={leavePay} />;
+  if (track) return <TrackPage number={track} onDone={leaveTrack} />;
   return <Dashboard onSignedOut={() => setSignedIn(false)} />;
 }

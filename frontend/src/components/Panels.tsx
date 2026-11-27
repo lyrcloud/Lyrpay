@@ -7,6 +7,11 @@ const KIND_LABEL: Record<Transaction['kind'], string> = {
   giftcard: 'Gift card', redeem: 'Redeemed gift card', refund: 'Refund', bonus: 'Bonus', card: 'Card', adjust: 'Adjustment',
 };
 
+const KIND_ICON: Record<Transaction['kind'], string> = {
+  topup: '＋', payment: '🛍', send: '↗', receive: '↙', convert: '⇄', withdraw: '🏦',
+  giftcard: '🎁', redeem: '🎟', refund: '↩', bonus: '⭐', card: '💳', adjust: '✎',
+};
+
 const STATUS_LABEL = { pending: 'Processing', failed: 'Failed, returned to balance', paid: '' };
 const CARD_STATUS_LABEL = { pending: 'Pending', failed: 'Cancelled, returned to balance', paid: '' };
 const TOPUP_STATUS_LABEL = { pending: 'On its way from your bank', failed: "Your bank didn't pay", paid: '' };
@@ -130,7 +135,8 @@ export function Activity({ transactions, openId = '' }: { transactions: Transact
         return (
           <li key={tx.id} className={expanded ? 'open' : ''}>
             <button className="activity-row" aria-expanded={expanded} onClick={() => setOpen(expanded ? '' : tx.id)}>
-              <div>
+              <span className={`tx-icon kind-${tx.kind}${tx.status === 'pending' ? ' moving' : ''}`} aria-hidden="true">{KIND_ICON[tx.kind] ?? '•'}</span>
+              <div className="tx-main">
                 <strong>{KIND_LABEL[tx.kind]}{tx.counterparty && !['topup', 'withdraw'].includes(tx.kind) ? ` · ${tx.counterparty}` : ''}{tx.batch ? ' · bulk' : ''}</strong>
                 <span>
                   {formatDate(tx.at)}{tx.note ? ` · ${tx.note}` : ''}
